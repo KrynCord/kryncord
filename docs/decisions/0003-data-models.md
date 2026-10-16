@@ -16,7 +16,7 @@ payload cru.
 
 ## Consequências
 
-- Zero dependências novas — coerente com o `KrynCord-ARCHITECTURE.md` §7.
+- Zero dependências novas — coerente com o `docs/internals/architecture.md` §7.
 - `mypy --strict` funciona sem plugin.
 - O parsing fica em `models/base.py` com helpers próprios
   (`_get_str`, `_get_int`, `_get_optional`), centralizando a regra de
@@ -31,7 +31,7 @@ Só os modelos de que o caminho mínimo precisa:
 
 `User`, `Message`, `Channel`, `Guild`, `Member`, `Role`, `Attachment`.
 
-Os demais (~13 listados no `KrynCord-ARCHITECTURE.md` §6) entram quando um
+Os demais (~13 listados no `docs/internals/architecture.md` §6) entram quando um
 endpoint concretamente precisar deles.
 
 ## Alternativas consideradas

@@ -6,7 +6,7 @@
 ## Contexto
 
 A KrynCord precisa de um transporte HTTP assíncrono para a camada REST. A
-decisão foi adiada no `KrynCord-ARCHITECTURE.md` §7 até que um protótipo
+decisão foi adiada no `docs/internals/architecture.md` §7 até que um protótipo
 validasse a escolha.
 
 Critérios: suporte a `asyncio`, streaming, uploads multipart, timeouts

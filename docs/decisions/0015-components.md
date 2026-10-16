@@ -29,7 +29,7 @@ components/
   validation.py   regras estruturais, ComponentError com caminho
 ```
 
-`KrynCord-ARCHITECTURE.md` §5 é atualizado. O critério foi separar por
+`docs/internals/architecture.md` §5 é atualizado. O critério foi separar por
 **tipo de componente** (o que muda na API) e isolar validação num módulo
 só — porque a validação é a parte que precisa de caminho na mensagem.
 

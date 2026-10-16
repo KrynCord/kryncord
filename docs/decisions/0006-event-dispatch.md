@@ -12,7 +12,7 @@ sem dizer quando o payload mudasse. Era o oposto do que uma biblioteca
 promete.
 
 Havia também uma decisão de execução pendente, explicitamente pedida pelo
-`KrynCord-ARCHITECTURE.md` §6: "O dispatcher deve definir se handlers são
+`docs/internals/architecture.md` §6: "O dispatcher deve definir se handlers são
 executados em sequência ou em tarefas independentes. A política deve ser
 documentada e testada, inclusive para exceções e cancelamento."
 
@@ -115,7 +115,7 @@ evento concretamente precisar — a regra da `0003` vale.
 
 ## Referências
 
-- `KrynCord-ARCHITECTURE.md` §6 (`models/`, `events/`)
+- `docs/internals/architecture.md` §6 (`models/`, `events/`)
 - `ideias/10-events.md` — `@event`, nomes em snake_case
 - `docs/decisions/0003-data-models.md` — por que dataclasses e o
   contrato de ausência

@@ -6,7 +6,7 @@
 ## Contexto
 
 Com os transportes escolhidos, falta definir a ordem de implementação das
-duas camadas centrais. O `KrynCord-ARCHITECTURE.md` §14 sugere REST (Fase 1)
+duas camadas centrais. O `docs/internals/architecture.md` §14 sugere REST (Fase 1)
 depois Gateway (Fase 2), mas não justifica.
 
 ## Decisão

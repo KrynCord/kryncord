@@ -352,7 +352,7 @@ leu o evento.
 
 ## Referências
 
-- `KrynCord-ARCHITECTURE.md` §`cache/` e `state/` (linha 543) e §11
+- `docs/internals/architecture.md` §`cache/` e `state/` (linha 543) e §11
   Cache e memória (linha 656)
 - `docs/decisions/0006-event-dispatch.md` — por que o `REGISTRY` não
   muda e por que `from_payload` devolve `None`

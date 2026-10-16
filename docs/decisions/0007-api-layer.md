@@ -168,7 +168,7 @@ Valem registro porque nenhum teria aparecido ao vivo em desenvolvimento:
 
 ## Referências
 
-- `KrynCord-ARCHITECTURE.md` §`api/`
+- `docs/internals/architecture.md` §`api/`
 - `docs/decisions/0001-http-transport.md` — a mecânica por baixo
 - `docs/decisions/0003-data-models.md` — por que modelos são dados puros
 - `docs/decisions/0004-build-order.md` — REST e Gateway independentes

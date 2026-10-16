@@ -7,7 +7,7 @@
 
 A Fase 2 precisa responder, para cada queda de conexão, uma de três
 perguntas: a sessão ainda vale (`RESUME`), morreu (`IDENTIFY`), ou não
-adianta reconectar (`FATAL`). O `KrynCord-ARCHITECTURE.md` descreve o
+adianta reconectar (`FATAL`). O `docs/internals/architecture.md` descreve o
 fluxo, mas não fixa a tabela — e a tabela é o único lugar onde um erro
 se manifesta como "o bot volta em 5 segundos" ou "o bot volta em 30
 minutos, reconstruindo tudo".

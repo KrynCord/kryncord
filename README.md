@@ -150,7 +150,7 @@ base/discord.js/    referência do discord.js (não é código do projeto)
 
 Os pacotes de cada fase existem já com `__init__.py` documentando a
 responsabilidade. Os arquivos de módulo entram quando tiverem testes e
-uso claro — conforme o fim do `KrynCord-ARCHITECTURE.md`.
+uso claro — conforme o fim do `docs/internals/architecture.md`.
 
 ## Verificação
 
