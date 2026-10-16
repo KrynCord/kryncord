@@ -1,27 +1,133 @@
 # KrynCord
 
-Biblioteca assíncrona para criar bots Discord em Python, com implementação
-própria das camadas REST e Gateway.
+[![PyPI version](https://img.shields.io/pypi/v/kryncord.svg)](https://pypi.org/project/kryncord/)
+[![Python versions](https://img.shields.io/pypi/pyversions/kryncord.svg)](https://pypi.org/project/kryncord/)
+[![License: MIT](https://img.shields.io/pypi/l/kryncord.svg)](LICENSE)
+[![tests](https://github.com/KrynCord/kryncord/actions/workflows/tests.yml/badge.svg)](https://github.com/KrynCord/kryncord/actions/workflows/tests.yml)
+[![lint](https://github.com/KrynCord/kryncord/actions/workflows/lint.yml/badge.svg)](https://github.com/KrynCord/kryncord/actions/workflows/lint.yml)
 
-## Objetivos
+An async-first Discord API library for Python, with REST and Gateway
+implemented from scratch — no `discord.py` underneath, no fork of one.
 
-- API async-first
-- REST e Gateway independentes
-- Roteamento de comandos e interações
-- Cache opcional
-- Tipagem e validação
-- Testes e benchmarks
-- Sem dependência de discord.py ou forks
+**Current release: [`0.1.0b1`](https://pypi.org/project/kryncord/) (beta).**
+Requires Python 3.11+.
 
-## Instalação
+[Documentation](docs/README.md) · [Changelog](CHANGELOG.md) ·
+[PyPI](https://pypi.org/project/kryncord/) ·
+[Issues](https://github.com/KrynCord/kryncord/issues)
+
+### Português
+
+Biblioteca assíncrona para bots Discord, com REST e Gateway escritos do
+zero. Instalação (é beta, por isso o `--pre`):
 
 ```bash
-pip install kryncord
+pip install --pre kryncord
 ```
 
-Requer Python 3.11+.
+Depois é `from kryncord import Client, Config, Intents`. O exemplo
+completo está logo abaixo em [Quick start](#quick-start), o mapa da
+documentação em [`docs/README.md`](docs/README.md) e o passo a passo de
+publicação em [`docs/guides/publication.md`](docs/guides/publication.md).
+A licença é MIT, o código está em
+[github.com/KrynCord/kryncord](https://github.com/KrynCord/kryncord).
 
-## Uso
+## What it is
+
+KrynCord talks to Discord through two layers it owns:
+
+- **REST** — a client with per-bucket rate limiting, retries with
+  backoff and multipart upload, wrapped by `client.api`, which turns
+  raw JSON into typed models and accepts an object where an ID is
+  expected (`send(channel, ...)` and `send(channel.id, ...)` are the
+  same destination).
+- **Gateway** — Identify, heartbeat with ACK handling, reconnection
+  classified by close code, and session resume.
+
+Between them sits the client: it decodes payloads into `Message`,
+`Guild`, `Ready` and friends, keeps an optional local cache, and hands
+handlers an object rather than a dict.
+
+It is built for people who want the protocol handled correctly and the
+API typed, without pulling in a framework on top of it.
+
+## Features
+
+### Implemented
+
+- **Lifecycle** — `async with Client(config)` plus `await client.start()`;
+  shutdown closes the socket and the HTTP client in order.
+- **REST surface** — 72 methods across 9 modules under `client.api`:
+  `messages`, `channels`, `members`, `roles`, `webhooks`,
+  `applications`, `interactions`, `guilds`, `users`.
+- **Typed payloads** for 15 events: `ready`, `resumed`,
+  `message_create`, `message_update`, `message_delete`,
+  `message_delete_bulk`, `channel_create`, `channel_update`,
+  `channel_delete`, `guild_create`, `guild_update`, `guild_delete`,
+  `interaction_create`, `typing_start`, `voice_state_update`.
+  Event names accept both spellings — `"message_create"` and
+  `"MESSAGE_CREATE"` reach the same handler.
+- **Slash commands** — `@command(...)`, options, validation, registry
+  and `CommandSync`, which diffs local definitions against what
+  Discord has and reports `created` / `updated` / `deleted` /
+  `unchanged`.
+- **Responders** — `@responder(...)` routes on `custom_id` with
+  wildcards, parameter conversion, and `emit_responder` to fire a
+  route from anywhere.
+- **Components** — buttons, select menus, inputs, labels, modals,
+  embeds and the V2 block (`Container`, `Section`, `TextDisplay`,
+  `MediaGallery`, `Separator`, `Thumbnail`), with the serialization
+  the REST layer expects.
+- **Cache** — `client.cache`, on by default, with a `CachePolicy` and
+  hit-rate statistics. Guilds, channels, roles and voice states are
+  cached out of the box; `members` and `messages` are opt-in because
+  they grow with the server (`CachePolicy(members=True, messages=500)`).
+- **Errors** — 16 exception classes, all descending from
+  `KrynCordError`, so `except KrynCordError` catches the library
+  without catching the rest of your program.
+- **Typing** — ships `py.typed`; the package passes `mypy --strict`.
+
+### Not implemented yet
+
+- **Voice** — `kryncord.voice` exists only to mark the spot in the
+  package map. Voice needs its own gateway, UDP and encryption, and
+  there is no functional support.
+- **Benchmarks** — the `benchmarks/` directory is empty.
+- **Stable releases** — `0.1.0b1` is the only published version, so
+  the API may still change before `0.1.0`.
+
+## Installation
+
+KrynCord needs Python 3.11 or newer and has two runtime dependencies
+(`httpx`, `websockets`).
+
+```bash
+# current state of the project: a beta, so --pre is required
+pip install --pre kryncord
+
+# a specific version
+pip install --pre kryncord==0.1.0b1
+
+# straight from the repository
+pip install git+https://github.com/KrynCord/kryncord.git
+```
+
+Without `--pre`, pip ignores `0.1.0b1` because it is a pre-release, and
+it looks as if the project does not exist. Once `0.1.0` stable is out,
+`pip install kryncord` becomes the normal command.
+
+To work on the library itself:
+
+```bash
+git clone https://github.com/KrynCord/kryncord.git
+cd kryncord
+python -m pip install -e ".[dev]"
+```
+
+## Quick start
+
+A bot that answers `!ping` with `pong` — the same code as
+[`examples/minimal_bot.py`](examples/minimal_bot.py):
 
 ```python
 import asyncio
@@ -38,140 +144,197 @@ async def main() -> None:
         @client.on("message_create")
         async def responde(message: Message) -> None:
             if message.content == "!ping":
-                # `reply` aceita a própria mensagem — o canal sai de lá,
-                # e o `message_reference` é montado sozinho.
                 await client.api.messages.reply(message, "pong")
 
         await client.start()
-        await asyncio.Event().wait()  # fica no ar
+        await asyncio.Event().wait()  # block until Ctrl+C
 
 
 asyncio.run(main())
 ```
 
-O handler recebe o payload **já interpretado** — um `Message`, não um
-`dict`. `message.content` é `None` quando o Discord não mandou texto, e
-não `""`; `message.author` é `None` quando não veio autor. Campo ausente
-nunca é preenchido com default, porque ausente e default são coisas
-diferentes.
+Set `DISCORD_TOKEN` and run it. Three details worth knowing:
 
-O nome do evento aceita as duas formas — `"message_create"` e
-`"MESSAGE_CREATE"` chegam ao mesmo handler. E os métodos da API aceitam
-ID ou objeto: `send(123, ...)`, `send("123", ...)`,
-`send(channel, ...)` e `send(message, ...)` são o mesmo destino.
+- `Config` takes `intents` as its first argument; privileged intents
+  also have to be listed in `enabled_intents`, or `start()` refuses to
+  boot instead of letting Discord reject the Identify later.
+- `client.start()` connects and returns — the trailing
+  `asyncio.Event().wait()` is what keeps the process alive.
+- `async with` closes the connection on the way out, including on an
+  exception.
 
-O `api/` é alcançado por `client.api`, e não por `message.reply()` — os
-modelos são dados puros, sem referência a runtime. Ver
-[0007](docs/decisions/0007-api-layer.md) para o porquê.
+The handler receives a decoded `Message`. `message.content` is `None`
+when Discord sent no text (not `""`), and `message.author` is `None`
+for a webhook with no author.
 
-## Desenvolvimento
+## More examples
 
-```bash
-python -m pip install -e ".[dev]"
-pytest
-ruff check src tests
-ruff format --check src tests
-mypy src/kryncord
+### Slash command
+
+```python
+import asyncio
+import os
+
+from kryncord import Client, CommandContext, Config, Intents, command
+from kryncord.commands import CommandSync
+
+
+async def main() -> None:
+    config = Config(token=os.environ["DISCORD_TOKEN"], intents=Intents.default())
+
+    async with Client(config) as client:
+
+        @command(name="ping", description="Responde pong", registry=client.commands)
+        async def ping(ctx: CommandContext) -> None:
+            await ctx.reply("pong")
+
+        # registers the definition with Discord and reports the diff
+        report = await CommandSync(client.commands, client.api.applications).sync()
+        print(report.created, report.updated, report.deleted, report.unchanged)
+
+        await client.start()
+        await asyncio.Event().wait()
+
+
+asyncio.run(main())
 ```
 
-## Status
+Handlers must be `async` and take exactly one argument — the
+`CommandContext`. A synchronous or zero-argument handler raises
+`TypeError` at definition time rather than failing on every click.
 
-**Fase 3 — Core.** O bot recebe payload tipado e consegue responder.
-`models/` traz `User`, `Message`, `Channel`, `Guild`, `Member`,
-`Attachment`, `Role`, `Ban`, `Webhook`, `ApplicationCommand`,
-`Interaction`, `Ready` e os `Partial*` para o que o Discord entrega
-incompletos de propósito. `events/` converte o payload e decide a
-política de execução — sequencial, exceção isolada, cancelamento
-propaga.
+### Reading from the cache
 
-`api/` é o vocabulário por recurso sobre a mecânica REST da Fase 1 —
-**70 métodos em 9 módulos** (`messages`, `channels`, `members`,
-`roles`, `webhooks`, `applications`, `interactions`, `guilds`,
-`users`) — e o `Client` liga as duas.
+```python
+from kryncord import Client, Guild
 
-`cache/` + `state/` dão ao bot memória local: `client.cache`, **ligada
-por padrão**, guarda guilds, channels, roles e users — `members` e
-`messages` são opt-in por serem os que crescem com o servidor. Remoção
-híbrida (eventos invalidam o que o gateway anuncia; LRU com teto guarda
-o que não tem evento de remoção) e o evento é aplicado **antes** dos
-handlers rodarem, senão todo handler leria o estado do evento
-anterior.
 
-1516 testes passando. `ruff check`, `ruff format --check` e `mypy` limpos.
+def ver_guild(client: Client, guild: Guild) -> None:
+    # updated before handlers run, so this is already populated
+    cached = client.cache.get_guild(guild.id)
+    print(cached is not None, client.cache.policy, client.cache.enabled)
+    print(client.cache.stats.hit_rate, client.cache.stats.total_evictions)
+```
 
-Fase 4 entrou em andamento pela metade dos registros de decisão —
-`0010`–`0024` fecham a superfície inteira (construtor, registry,
-contextos, rota, conversores, componentes, máquina de estados,
-middleware, sync, bootstrap, eventos, autocomplete, context menus,
-paridade com o discord.js e o bloco de componentes), e cada escolha
-passou por um conselho de 22 perfis com veredito e divergência
-registrados em `docs/decisions/`. Já em código: o `permissions.py` +
-as três `Options` no `Config`, o `commands/` inteiro (option,
-definition, validation, instance, registry, context, sync,
-autocomplete), a máquina de estados de interação com a superfície do
-discord.js (`update`, `defer_update`, `fetch_reply`, `launch_activity`,
-`await_responder`), os 17 predicados `is_*()` no modelo, o `responders/`
-inteiro (ids, patterns, router, converters, params, context, registry,
-decorators, dispatch) e o `components/` inteiro (buttons, selects,
-inputs, uploads, choices, rows, displays, modals, colors, validation)
-com os embeds e a normalização que serializa no `api/`. Falta
-`events/`, middleware como bloco próprio e o `bootstrap`.
+It is local memory, not a mirror of Discord — see the limits below.
 
-| Fase | Conteúdo | Status |
-|---|---|---|
-| 0 | Pacote, erros, fundação, toolchain, CI | ✅ |
-| 1 | REST: rotas, rate limits, buckets | ✅ |
-| 2 | Gateway: connect, identify, heartbeat, resume | ✅ |
-| 3 | Core: `Client`, `api/`, `models/`, dispatcher, `cache/`, `state/` | ✅ |
-| 4 | Interações: commands, responders, components | 🔶 api/ |
-| 5 | Benchmarks do cache | ⬜ |
+### Errors and logging
 
-## Estrutura
+```python
+from kryncord import DiscordAPIError, KrynCordError, RateLimitError
+from kryncord.logging import setup_logging
+
+setup_logging("INFO")  # configures the `kryncord.*` loggers
+
+try:
+    ...
+except RateLimitError:
+    ...  # Discord said 429 and the client already waited and retried
+except DiscordAPIError:
+    ...  # a non-retryable API error
+except KrynCordError:
+    ...  # anything else from the library
+```
+
+Token values are passed through `kryncord.logging.redact()` before
+being logged.
+
+## Documentation
+
+Everything lives in the repository — there is no separate docs site
+yet.
+
+| Where | What |
+|---|---|
+| [`docs/README.md`](docs/README.md) | Index and reading order |
+| [`docs/internals/architecture.md`](docs/internals/architecture.md) | Full architecture: layers, modules, boundaries |
+| [`docs/decisions/`](docs/decisions/) | 30 ADRs — why each decision was made |
+| [`docs/api/`](docs/api/) | Component specs (V1, V2 and modals) |
+| [`docs/guides/publication.md`](docs/guides/publication.md) | Release process: TestPyPI, PyPI, versioning |
+| [`CHANGELOG.md`](CHANGELOG.md) | What changed in each release |
+| [`examples/`](examples/) | Runnable example |
+
+## Architecture
 
 ```text
-src/kryncord/       pacote público
-  client.py         fachada e ciclo de vida
-  config.py         Config, HTTPConfig, GatewayConfig (frozen)
-  intents.py        bits de intent + validação privileged
-  enums.py          opcodes, close codes, permissões
-  errors.py         hierarquia de exceções
-  logging.py        namespace kryncord + redact()
-  lifecycle.py      tasks supervisionadas, encerramento limpo
-  <pacote>/         api, gateway, http, rest, interactions,
-                    responders, commands, components, events,
-                    models, builders, cache, state, discovery,
-                    voice, internal
-tests/unit/         testes sem rede
-tests/integration/  testes com transportes simulados
-docs/decisions/     registros de decisão de arquitetura
-ideias/             design da API de alto nível (referência)
-base/discord.js/    referência do discord.js (não é código do projeto)
+src/kryncord/
+  client.py     facade and lifecycle
+  config.py     Config, HTTPConfig, GatewayConfig (frozen)
+  intents.py    intent bits + privileged validation
+  errors.py     exception hierarchy
+  http/         transport, buckets, rate limits, retries
+  gateway/      connect, identify, heartbeat, resume
+  rest/         routes and raw requests
+  api/          typed vocabulary on top of REST (client.api)
+  models/       User, Message, Guild, Interaction, ...
+  events/       payload decoding and dispatch policy
+  commands/     definitions, options, registry, sync
+  responders/   custom_id routing and converters
+  components/   buttons, selects, modals, embeds
+  cache/        policy, memory cache, statistics
+  state/        connection state fed by the gateway
+tests/          unit, integration and contract suites
+docs/           architecture, ADRs and guides
 ```
 
-Os pacotes de cada fase existem já com `__init__.py` documentando a
-responsabilidade. Os arquivos de módulo entram quando tiverem testes e
-uso claro — conforme o fim do `docs/internals/architecture.md`.
+Two boundaries the code keeps deliberately: `rest/` knows routes and
+limits but not models, and `models/` are plain data with no reference
+to the runtime — which is why replies go through
+`client.api.messages.reply(...)` rather than `message.reply(...)`.
+See [ADR 0007](docs/decisions/0007-api-layer.md).
 
-## Verificação
+## Compatibility
+
+**Tested:** Python 3.11, 3.12 and 3.13, on both Linux and Windows —
+that is the CI matrix in [`.github/workflows/tests.yml`](.github/workflows/tests.yml),
+together with `ruff check`, `ruff format --check` and `mypy --strict`.
+
+**Expected to work:** any platform CPython runs on, since the
+dependencies (`httpx`, `websockets`) are pure Python.
+
+**Discord side:** KrynCord targets the public Discord API. Payload
+shape, rate limits and feature availability are Discord's call, not
+the library's.
+
+## Limits worth knowing
+
+- **`MESSAGE_CONTENT` is privileged.** Enable it in the Discord
+  Developer Portal before requesting the intent, or the Identify is
+  rejected. Without the intent, `message.content` arrives `None` for
+  messages from other users — that is Discord's behaviour, not a bug
+  in the library.
+- **Intents are checked twice.** Whatever `Config(intents=...)` asks
+  for must also be covered by `enabled_intents`, or `start()` raises
+  before connecting.
+- **The cache is not a database.** It holds what the gateway sent, is
+  lost on restart, and is capped: `users` and `messages` are LRU with
+  a limit, so a long-running bot will evict old entries.
+- **Absent is not default.** A field Discord omitted arrives as
+  `None` and is never filled in with a conventional value. `None` and
+  `0` mean different things.
+- **Network failures are not handled for you.** The gateway
+  reconnects and resumes on its own; the REST client retries what is
+  safe to retry. Beyond that, connection problems surface as
+  `GatewayError` / `HTTPError` for your code to decide on.
+
+## Development
 
 ```bash
 python -m pip install -e ".[dev]"
-python -m pytest
-python -m ruff check src tests
-python -m ruff format --check src tests
-python -m mypy
+pytest                            # 1667 tests, no network needed
+ruff check src tests
+ruff format --check src tests
+mypy                              # strict, whole package
 ```
 
-## Decisões
+These are exactly the checks CI runs on every push. Tests use
+simulated transports, so no Discord token is required to run them.
 
-- [0001 — Transporte HTTP: httpx](docs/decisions/0001-http-transport.md)
-- [0002 — Transporte WebSocket: websockets](docs/decisions/0002-websocket-transport.md)
-- [0003 — Modelos de dados: dataclasses](docs/decisions/0003-data-models.md)
-- [0004 — Ordem de construção: REST → Gateway](docs/decisions/0004-build-order.md)
-- [0005 — Reconexão do Gateway: classificação de close code](docs/decisions/0005-gateway-reconnect.md)
-- [0006 — Eventos: payload tipado e política de dispatch](docs/decisions/0006-event-dispatch.md)
-- [0007 — Camada `api/`: vocabulário sobre a mecânica REST](docs/decisions/0007-api-layer.md)
+Bug reports and proposals go through
+[GitHub Issues](https://github.com/KrynCord/kryncord/issues). There is
+no `CONTRIBUTING.md` yet — a pull request that keeps those four
+commands green is the working rule.
 
-## Licença
+## License
 
-MIT
+MIT — see [`LICENSE`](LICENSE). Copyright (c) 2026 Gustavo Silva.
