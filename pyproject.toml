@@ -66,6 +66,11 @@ only-include = [
 asyncio_mode = "auto"
 testpaths = ["tests"]
 addopts = "-ra --strict-markers --strict-config"
+# `tests/conftest.py` é importado como `tests.conftest`, o que exige a
+# raiz do projeto no `sys.path`. `python -m pytest` coloca o CWD lá
+# sozinho; o binário `pytest` (que é o que a CI roda) não — e aí a
+# coleção inteira falha com ModuleNotFoundError.
+pythonpath = ["."]
 
 [tool.ruff]
 line-length = 100
