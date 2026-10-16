@@ -19,10 +19,22 @@ name: publish
 # Autenticação por Trusted Publishing (OIDC): nenhum token de API
 # guardado no GitHub. Cada ambiente (`testpypi`, `pypi`) é configurado
 # uma vez no site do PyPI apontando para este arquivo.
+#
+# A 0.1.0b1 foi publicada na mão com twine antes de o Trusted Publishing
+# existir, então a gatilho por tag está DESLIGADO por enquanto — dá para
+# disparar na mão pela aba Actions. Para religar:
+#
+#   1. configurar o Trusted Publisher no PyPI e no TestPyPI
+#      (owner `KrynCord`, repo `kryncord`, workflow `publish.yml`,
+#      environments `pypi` e `testpypi`);
+#   2. trocar abaixo `workflow_dispatch` por:
+#
+#      on:
+#        push:
+#          tags: ["v*"]
 
 on:
-  push:
-    tags: ["v*"]
+  workflow_dispatch:
 
 jobs:
   checks:
