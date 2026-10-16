@@ -1,0 +1,58 @@
+# Ambientes virtuais
+.venv/
+venv/
+env/
+ENV/
+
+# Bytecode e caches
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+.pytest_history/
+
+# Build
+build/
+dist/
+*.egg-info/
+*.egg
+.eggs/
+pip-wheel-metadata/
+
+# Editores
+.idea/
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+*.swp
+*.swo
+*~
+
+# Sistema
+.DS_Store
+Thumbs.db
+
+# Segredos — nunca commitar
+.env
+.env.*
+!.env.example
+*.token
+secrets.*
+config.local.*
+
+# Cobertura
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+
+# Fora do repositório — material local, não é parte da biblioteca
+# (o gitignore não aceita comentário no fim da linha: o `#` viraria
+# parte do padrão e nada seria ignorado)
+base/
+.freebuff/
+ideias/
+bot testes/

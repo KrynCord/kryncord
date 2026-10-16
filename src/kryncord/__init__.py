@@ -1,0 +1,336 @@
+"""KrynCord — biblioteca assíncrona para criar bots Discord.
+
+Implementação própria das camadas REST e Gateway, sem depender de
+discord.py, Pycord ou forks.
+
+Uso mínimo::
+
+    from kryncord import Client, Config, Intents, Message
+
+    config = Config(intents=Intents.default())
+
+    async with Client(config) as client:
+        @client.on("message_create")
+        async def mensagem(message: Message):
+            print(message.author_name, message.content)
+
+        await client.start()
+"""
+
+from kryncord.api import DiscordAPI
+from kryncord.builders import (
+    Embed,
+    EmbedAuthor,
+    EmbedField,
+    EmbedFooter,
+    EmbedImage,
+    ReplyOptions,
+    create_embed,
+    normalizar_mensagem,
+)
+from kryncord.cache import (
+    CacheKind,
+    CachePolicy,
+    CacheProtocol,
+    CacheStats,
+    MemoryCache,
+)
+from kryncord.client import Client
+from kryncord.commands import (
+    AutocompleteContext,
+    CommandContext,
+    CommandDefinition,
+    CommandInstance,
+    CommandRegistry,
+    CommandScope,
+    Option,
+    OptionsAccessor,
+    OptionType,
+    choice,
+    command,
+    create_command,
+    validate_definition,
+)
+from kryncord.components import (
+    ActionRow,
+    Button,
+    Checkbox,
+    CheckboxGroup,
+    Component,
+    Container,
+    File,
+    FileUpload,
+    Label,
+    MediaGallery,
+    Modal,
+    RadioGroup,
+    Section,
+    SelectOption,
+    Separator,
+    StringSelectMenu,
+    TextDisplay,
+    TextInput,
+    TextInputStyle,
+    Thumbnail,
+    create_components,
+    create_label,
+    create_link_button,
+    create_modal,
+    create_row,
+    create_string_select,
+    create_text_input,
+    create_user_select,
+    parse_flags,
+    validate_message,
+)
+from kryncord.config import (
+    CommandOptions,
+    Config,
+    EventOptions,
+    GatewayConfig,
+    HTTPConfig,
+    ResponderOptions,
+)
+from kryncord.discovery import bootstrap
+from kryncord.enums import (
+    ApplicationCommandType,
+    ButtonStyle,
+    ChannelType,
+    CloseCode,
+    ComponentType,
+    GatewayOpcode,
+    InteractionResponseType,
+    InteractionType,
+    MessageFlags,
+    Permission,
+    ResponderType,
+    permission_names,
+)
+from kryncord.errors import (
+    BlockHandlers,
+    CommandDefinitionError,
+    ComponentError,
+    ConversionError,
+    DefinitionError,
+    DiscordAPIError,
+    DispatchError,
+    EventDefinitionError,
+    GatewayError,
+    HTTPError,
+    InteractionStateError,
+    InteractionTimeoutError,
+    KrynCordError,
+    LifecycleError,
+    RateLimitError,
+    ResponderDefinitionError,
+    SessionInvalidError,
+)
+from kryncord.events import EventContext, EventName, event, normalize_event_name
+from kryncord.intents import Intents
+from kryncord.interactions import InteractionContext, InteractionState, ModalFields
+from kryncord.lifecycle import Lifecycle
+from kryncord.logging import get_logger, redact, setup_logging
+from kryncord.models import (
+    ApplicationCommand,
+    Attachment,
+    Ban,
+    Channel,
+    Guild,
+    Interaction,
+    Member,
+    Message,
+    PartialChannel,
+    PartialGuild,
+    PartialMessage,
+    Ready,
+    Role,
+    User,
+    Webhook,
+    snowflake_datetime,
+)
+from kryncord.permissions import Permissions, parse_permissions, parse_permissions_list
+from kryncord.registry import Registry, registry
+from kryncord.responders import (
+    Esperas,
+    Match,
+    Padrao,
+    Params,
+    ResponderContext,
+    ResponderEntry,
+    ResponderRegistry,
+    block,
+    build_custom_id,
+    compose,
+    emit_responder,
+    parse_rota,
+    registrar_conversor,
+    responder,
+)
+from kryncord.state import ConnectionState, GuildState
+from kryncord.version import __version__
+
+# Agrupado por categoria de propósito, não em ordem alfabética: quem lê a
+# API pública quer ver "erros" junto, não espalhado entre classes.
+__all__ = [  # noqa: RUF022
+    "__version__",
+    # client e configuração
+    "Client",
+    "Config",
+    "bootstrap",
+    "HTTPConfig",
+    "GatewayConfig",
+    "DiscordAPI",
+    "Lifecycle",
+    "Intents",
+    # options — 0010
+    "CommandOptions",
+    "ResponderOptions",
+    "EventOptions",
+    # logging
+    "get_logger",
+    "setup_logging",
+    "redact",
+    # enums
+    "ApplicationCommandType",
+    "ButtonStyle",
+    "ChannelType",
+    "CloseCode",
+    "MessageFlags",
+    "GatewayOpcode",
+    "InteractionResponseType",
+    "InteractionType",
+    "Permission",
+    "permission_names",
+    # permissões em bitfield — 0010
+    "Permissions",
+    "parse_permissions",
+    "parse_permissions_list",
+    # eventos
+    "EventName",
+    "EventContext",
+    "event",
+    "normalize_event_name",
+    # cache e estado local
+    "CacheKind",
+    "CachePolicy",
+    "CacheProtocol",
+    "CacheStats",
+    "MemoryCache",
+    "ConnectionState",
+    "GuildState",
+    # modelos
+    "Attachment",
+    "Channel",
+    "Guild",
+    "Member",
+    "Message",
+    "PartialChannel",
+    "PartialGuild",
+    "PartialMessage",
+    "Ready",
+    "User",
+    "snowflake_datetime",
+    # modelos de Fase 4
+    "ApplicationCommand",
+    "Ban",
+    "Interaction",
+    "Role",
+    "Webhook",
+    # erros
+    "KrynCordError",
+    "DefinitionError",
+    "CommandDefinitionError",
+    "ResponderDefinitionError",
+    "EventDefinitionError",
+    "HTTPError",
+    "RateLimitError",
+    "DiscordAPIError",
+    "GatewayError",
+    "SessionInvalidError",
+    "LifecycleError",
+    # erros de despacho — 0017
+    "DispatchError",
+    "BlockHandlers",
+    "ConversionError",
+    "ComponentError",
+    "InteractionStateError",
+    "InteractionTimeoutError",
+    # comandos — 0011, 0022
+    "CommandContext",
+    "CommandDefinition",
+    "CommandInstance",
+    "CommandRegistry",
+    "CommandScope",
+    "Option",
+    "OptionType",
+    "OptionsAccessor",
+    "AutocompleteContext",
+    "choice",
+    "command",
+    "create_command",
+    "validate_definition",
+    # interação — 0016
+    "InteractionContext",
+    "InteractionState",
+    "ModalFields",
+    # componentes — 0015, 0024
+    "ActionRow",
+    "Button",
+    "Checkbox",
+    "CheckboxGroup",
+    "Component",
+    "Container",
+    "File",
+    "FileUpload",
+    "Label",
+    "MediaGallery",
+    "Modal",
+    "RadioGroup",
+    "ReplyOptions",
+    "Section",
+    "SelectOption",
+    "Separator",
+    "StringSelectMenu",
+    "TextDisplay",
+    "TextInput",
+    "TextInputStyle",
+    "Thumbnail",
+    "create_components",
+    "create_embed",
+    "create_label",
+    "create_link_button",
+    "create_modal",
+    "create_row",
+    "create_string_select",
+    "create_text_input",
+    "create_user_select",
+    "normalizar_mensagem",
+    "parse_flags",
+    "validate_message",
+    # embeds — 0015 E, ideia 16
+    "Embed",
+    "EmbedAuthor",
+    "EmbedField",
+    "EmbedFooter",
+    "EmbedImage",
+    # responders — 0013, 0014, 0023
+    "ResponderType",
+    "ComponentType",
+    "Esperas",
+    "Match",
+    "Padrao",
+    "Params",
+    "ResponderContext",
+    "ResponderEntry",
+    "ResponderRegistry",
+    "block",
+    "compose",
+    "build_custom_id",
+    "emit_responder",
+    "parse_rota",
+    "registrar_conversor",
+    "responder",
+    # registry global — K12
+    "Registry",
+    "registry",
+]

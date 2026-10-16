@@ -1,0 +1,10 @@
+# Normaliza tudo para LF dentro do repositório — sem isso, cada arquivo
+# que você editar no Windows vira uma "mudança" de 100% das linhas na
+# primeira vez que o git toca nele.
+* text=auto eol=lf
+
+*.png binary
+*.jpg binary
+*.gif binary
+*.ico binary
+*.zip binary
