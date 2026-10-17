@@ -1,4 +1,4 @@
-"""Autocomplete — contexto, normalização e despacho (`0021`).
+"""Autocomplete — a interação, normalização e despacho (`0021`).
 
 O fio: a ordem de resolução **termina em resposta vazia** — o
 fallback legítimo. Exceção aqui fecharia a janela de sugestão com
@@ -11,14 +11,14 @@ import pytest
 
 from kryncord.commands.autocomplete import (
     MAX_ESCOLHAS,
-    AutocompleteContext,
     dispatch_autocomplete,
     foco_de,
     normalize_choices,
 )
 from kryncord.commands.definition import CommandDefinition
 from kryncord.commands.instance import CommandInstance
-from kryncord.errors import InteractionStateError
+from kryncord.errors import InvalidInteractionState
+from kryncord.interactions import AutocompleteInteraction, InteractionContext
 from kryncord.models.interaction import Interaction
 
 
@@ -100,46 +100,54 @@ class TestNormalizeChoices:
         assert len(saida[0]["name"]) == 100
 
 
-class TestAutocompleteContext:
+class TestAutocompleteInteracao:
     def test_focused_e_o_nome_focused_value_o_digitado(self) -> None:
         """ "`focused` é o nome da opção; `focused_value`, o que foi
         digitado — o contrato da `0021`, que corrigiu a ideia 06."""
-        ctx = AutocompleteContext(focused="termo", focused_value="dig")
+        api = ApiFalsa()
+        interacao = Interaction.from_payload(_payload_autocomplete())
+        inter = AutocompleteInteraction(
+            InteractionContext(interacao, api), focused="termo", focused_value="dig"
+        )
 
-        assert ctx.focused == "termo"
-        assert ctx.focused_value == "dig"
+        assert inter.focused == "termo"
+        assert inter.focused_value == "dig"
 
     async def test_respond_normaliza_e_marca(self) -> None:
         api = ApiFalsa()
         interacao = Interaction.from_payload(_payload_autocomplete())
-        ctx = AutocompleteContext(focused="t", focused_value="v", interaction=interacao, api=api)
+        inter = AutocompleteInteraction(
+            InteractionContext(interacao, api), focused="t", focused_value="v", api=api
+        )
 
-        await ctx.respond([("Ana", 1)])
+        await inter.autocomplete([("Ana", 1)])
 
         assert api.respostas == [[{"name": "Ana", "value": 1}]]
-        assert ctx.is_responded() is True
+        assert inter.is_responded() is True
 
     async def test_respond_duas_vezes_e_erro(self) -> None:
         """A interação aceita uma sugestão só — a segunda viraria 400
         genérico do Discord, sem dizer qual chamada saiu de ordem."""
         api = ApiFalsa()
         interacao = Interaction.from_payload(_payload_autocomplete())
-        ctx = AutocompleteContext(focused="t", interaction=interacao, api=api)
+        inter = AutocompleteInteraction(InteractionContext(interacao, api), focused="t", api=api)
 
-        await ctx.respond([])
-        with pytest.raises(InteractionStateError, match="uma sugestão só"):
-            await ctx.respond([])
+        await inter.autocomplete([])
+        with pytest.raises(InvalidInteractionState, match="uma sugestão só"):
+            await inter.autocomplete([])
 
     async def test_sem_api_e_erro_claro(self) -> None:
-        ctx = AutocompleteContext(focused="t")
+        api = ApiFalsa()
+        interacao = Interaction.from_payload(_payload_autocomplete())
+        inter = AutocompleteInteraction(InteractionContext(interacao, api), focused="t")
 
         with pytest.raises(RuntimeError, match="api"):
-            await ctx.respond([])
+            await inter.autocomplete([])
 
     async def test_sem_reply_no_contexto(self) -> None:
         """0012: autocomplete **só** responde com escolhas — o ajuste
         que o juiz pediu. `reply` não pode nem existir aqui."""
-        assert not hasattr(AutocompleteContext, "reply")
+        assert not hasattr(AutocompleteInteraction, "reply")
 
 
 class TestDispatchAutocomplete:
@@ -153,9 +161,9 @@ class TestDispatchAutocomplete:
         recebido: dict = {}
 
         @instance.autocomplete("termo")
-        async def sugere(ctx):
-            recebido["focused"] = ctx.focused
-            recebido["valor"] = ctx.focused_value
+        async def sugere(inter: AutocompleteInteraction):
+            recebido["focused"] = inter.focused
+            recebido["valor"] = inter.focused_value
             return [("Ana", 1)]
 
         api = ApiFalsa()
@@ -171,7 +179,7 @@ class TestDispatchAutocomplete:
         instance = self._instancia()
 
         @instance.autocomplete()
-        async def generico(ctx):
+        async def generico(inter: AutocompleteInteraction):
             return [("x", 1)]
 
         api = ApiFalsa()
@@ -194,12 +202,12 @@ class TestDispatchAutocomplete:
         assert api.respostas == [[]]
 
     async def test_handler_sem_responder_e_respondido_pelo_dispatch(self) -> None:
-        """Handler que só calcula e esquece do `respond` não deixa a
-        janela pendurada — o dispatch responde o que calculou."""
+        """Handler que só calcula e esquece do `autocomplete` não deixa
+        a janela pendurada — o dispatch responde o que calculou."""
         instance = self._instancia()
 
         @instance.autocomplete("termo")
-        async def calcula(ctx):
+        async def calcula(inter: AutocompleteInteraction):
             return [("Ana", 1)]
 
         api = ApiFalsa()

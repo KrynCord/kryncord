@@ -21,6 +21,7 @@ from kryncord.commands import (
 )
 from kryncord.enums import ApplicationCommandType
 from kryncord.errors import CommandDefinitionError, DefinitionError
+from kryncord.interactions import AutocompleteInteraction, CommandInteraction
 from kryncord.permissions import Permissions
 
 
@@ -280,11 +281,11 @@ class TestDefinition:
 # --------------------------------------------------------------------------
 
 
-async def _add(ctx: object, cargo: object = None) -> None:
+async def _add(interaction: CommandInteraction, cargo: object = None) -> None:
     """adiciona um papel"""
 
 
-async def _remove(ctx: object, cargo: object = None) -> None:
+async def _remove(interaction: CommandInteraction, cargo: object = None) -> None:
     """remove um papel"""
 
 
@@ -381,7 +382,7 @@ class TestInstance:
         inst = CommandInstance(_chat(), _handler)
 
         @inst.autocomplete("cor")
-        async def _(ctx: object) -> None: ...
+        async def _(inter: AutocompleteInteraction) -> None: ...
 
         assert "cor" in inst.autocomplete_handlers
 
@@ -391,18 +392,18 @@ class TestInstance:
         inst = CommandInstance(_chat(), _handler)
 
         @inst.autocomplete("cor")
-        async def _(ctx: object) -> None: ...
+        async def _(inter: AutocompleteInteraction) -> None: ...
 
         with pytest.raises(CommandDefinitionError, match="já registrado"):
 
             @inst.autocomplete("cor")
-            async def outro(ctx: object) -> None: ...
+            async def outro(inter: AutocompleteInteraction) -> None: ...
 
     def test_autocomplete_generico_por_default(self) -> None:
         inst = CommandInstance(_chat(), _handler)
 
         @inst.autocomplete()
-        async def _(ctx: object) -> None: ...
+        async def _(inter: AutocompleteInteraction) -> None: ...
 
         assert "*" in inst.autocomplete_handlers
 

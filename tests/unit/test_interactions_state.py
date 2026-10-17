@@ -1,4 +1,4 @@
-"""Máquina de estados da resposta a interação — `0016`.
+"""Máquina de estados da resposta a interação — `0016`, completada no `0031`.
 
 O ponto todo: violar a ordem é **nosso** erro, com a ação e o estado
 na mensagem — não um 400 genérico do Discord que não diz qual chamada
@@ -10,11 +10,13 @@ registra chamadas.
 
 from __future__ import annotations
 
+import time
+
 import pytest
 
-from kryncord.errors import InteractionStateError
+from kryncord.errors import InvalidInteractionState
 from kryncord.interactions import InteractionContext, InteractionState
-from kryncord.interactions.response import _TRANSICOES
+from kryncord.interactions.response import _TRANSICOES, DISCORD_EPOCH_MS
 from kryncord.models.interaction import Interaction
 
 APP = 111
@@ -72,13 +74,19 @@ class ApiFalsa:
         return [c[0] for c in self.chamadas]
 
 
-def _interacao() -> Interaction:
-    return Interaction(id=1, application_id=APP, type=2, token=TOKEN, guild_id=2, channel_id=3)
+def _interacao(id: int = 1) -> Interaction:
+    return Interaction(id=id, application_id=APP, type=2, token=TOKEN, guild_id=2, channel_id=3)
 
 
-def _contexto() -> tuple[InteractionContext, ApiFalsa]:
+def _contexto(id: int = 1) -> tuple[InteractionContext, ApiFalsa]:
     api = ApiFalsa()
-    return InteractionContext(_interacao(), api), api
+    return InteractionContext(_interacao(id), api), api
+
+
+def _snowflake_de(ms_atras: int) -> int:
+    """Um snowflake com a idade pedida — o id carrega o próprio instante."""
+    ms = int(time.time() * 1000) - DISCORD_EPOCH_MS - ms_atras
+    return (ms << 22) | 5
 
 
 # --------------------------------------------------------------------------
@@ -94,11 +102,12 @@ class TestEstados:
         assert ctx.is_responded() is False
         assert ctx.is_deferred() is False
         assert ctx.is_answered() is False
+        assert ctx.is_expired() is False
 
-    async def test_reply_vai_para_respondido(self) -> None:
+    async def test_respond_vai_para_respondido(self) -> None:
         ctx, api = _contexto()
 
-        await ctx.reply("oi")
+        await ctx.respond("oi")
 
         assert ctx.state is InteractionState.ANSWERED
         assert ctx.is_responded() is True
@@ -119,37 +128,37 @@ class TestEstados:
         ctx, _ = _contexto()
         await ctx.defer()
 
-        await ctx.edit("pronto")
+        await ctx.edit_original_response("pronto")
 
         assert ctx.state is InteractionState.ANSWERED
 
     async def test_edit_de_answered_e_idempotente(self) -> None:
         """Responder e depois editar é o fluxo normal — não é erro."""
         ctx, api = _contexto()
-        await ctx.reply("oi")
+        await ctx.respond("oi")
 
-        await ctx.edit("outra")
+        await ctx.edit_original_response("outra")
 
         assert ctx.state is InteractionState.ANSWERED
         assert api.nomes == ["respond", "edit_message"]
 
-    async def test_send_modal_de_unanswered_e_terminal(self) -> None:
+    async def test_open_modal_de_unanswered_e_terminal(self) -> None:
         """O Discord aceita modal como resposta inicial — não é erro."""
         ctx, api = _contexto()
 
-        await ctx.send_modal({"title": "x"})
+        await ctx.open_modal({"title": "x"})
 
-        assert ctx.state is InteractionState.MODAL
+        assert ctx.state is InteractionState.MODAL_OPENED
         assert ctx.is_responded() is True
         assert api.nomes == ["show_modal"]
 
-    async def test_send_modal_de_deferred_tambem(self) -> None:
+    async def test_open_modal_de_deferred_tambem(self) -> None:
         ctx, _ = _contexto()
         await ctx.defer()
 
-        await ctx.send_modal({"title": "x"})
+        await ctx.open_modal({"title": "x"})
 
-        assert ctx.state is InteractionState.MODAL
+        assert ctx.state is InteractionState.MODAL_OPENED
 
 
 # --------------------------------------------------------------------------
@@ -158,49 +167,49 @@ class TestEstados:
 
 
 class TestTransicoesProibidas:
-    async def test_reply_depois_de_reply_e_erro(self) -> None:
+    async def test_respond_depois_de_respond_e_erro(self) -> None:
         """Resposta dupla é o erro que mais aparece em bot — e o do
         Discord é um 400 sem dizer qual chamada."""
         ctx, api = _contexto()
-        await ctx.reply("oi")
+        await ctx.respond("oi")
 
-        with pytest.raises(InteractionStateError) as info:
-            await ctx.reply("de novo")
+        with pytest.raises(InvalidInteractionState) as info:
+            await ctx.respond("de novo")
 
         texto = str(info.value)
-        assert "reply()" in texto
+        assert "respond()" in texto
         assert "ANSWERED" in texto
-        assert "edit()" in texto  # diz a saída
+        assert "edit_original_response()" in texto  # diz a saída
         assert api.nomes == ["respond"]  # a segunda não foi mandada
 
-    async def test_reply_depois_de_defer_e_erro(self) -> None:
+    async def test_respond_depois_de_defer_e_erro(self) -> None:
         ctx, _ = _contexto()
         await ctx.defer()
 
-        with pytest.raises(InteractionStateError, match="DEFERRED"):
-            await ctx.reply("oi")
+        with pytest.raises(InvalidInteractionState, match="DEFERRED"):
+            await ctx.respond("oi")
 
-    async def test_defer_depois_de_reply_e_erro(self) -> None:
+    async def test_defer_depois_de_respond_e_erro(self) -> None:
         ctx, _ = _contexto()
-        await ctx.reply("oi")
+        await ctx.respond("oi")
 
-        with pytest.raises(InteractionStateError):
+        with pytest.raises(InvalidInteractionState):
             await ctx.defer()
 
-    async def test_reply_depois_de_modal_e_erro(self) -> None:
-        """Modal é terminal — não há mais resposta nesta interação."""
+    async def test_respond_depois_de_modal_e_erro(self) -> None:
+        """Modal é terminal — o envio é uma interação nova."""
         ctx, _ = _contexto()
-        await ctx.send_modal({"title": "x"})
+        await ctx.open_modal({"title": "x"})
 
-        with pytest.raises(InteractionStateError, match="terminal"):
-            await ctx.reply("oi")
+        with pytest.raises(InvalidInteractionState, match="terminal"):
+            await ctx.respond("oi")
 
     async def test_edit_de_unanswered_e_erro(self) -> None:
         """Não há resposta original para editar."""
         ctx, _ = _contexto()
 
-        with pytest.raises(InteractionStateError):
-            await ctx.edit("x")
+        with pytest.raises(InvalidInteractionState):
+            await ctx.edit_original_response("x")
 
     async def test_mensagem_de_erro_nao_quebra_no_unanswered(self) -> None:
         """Regressão: o mapa da saída não tinha entrada para
@@ -209,42 +218,138 @@ class TestTransicoesProibidas:
         diz nada."""
         ctx, _ = _contexto()
 
-        with pytest.raises(InteractionStateError) as info:
-            await ctx.edit("x")
+        with pytest.raises(InvalidInteractionState) as info:
+            await ctx.edit_original_response("x")
 
         assert "UNANSWERED" in str(info.value)
-        assert "reply()" in str(info.value)
+        assert "respond()" in str(info.value)
 
     async def test_mensagem_de_erro_nomeia_o_estado_em_todos(self) -> None:
         """Cada estado tem que ter saída nomeada — sem entrada, o
         lookup da mensagem falha no lugar do erro."""
         ctx, _ = _contexto()
-        await ctx.send_modal({"title": "x"})
+        await ctx.open_modal({"title": "x"})
 
-        with pytest.raises(InteractionStateError, match="MODAL"):
-            await ctx.reply("x")
+        with pytest.raises(InvalidInteractionState, match="MODAL_OPENED"):
+            await ctx.respond("x")
 
     async def test_delete_de_unanswered_e_erro(self) -> None:
         ctx, _ = _contexto()
 
-        with pytest.raises(InteractionStateError):
-            await ctx.delete()
+        with pytest.raises(InvalidInteractionState):
+            await ctx.delete_original_response()
 
-    async def test_follow_up_de_unanswered_e_erro(self) -> None:
+    async def test_followup_de_unanswered_e_erro(self) -> None:
         """O follow-up referencia a resposta original — que ainda não
         existe. O Discord recusa, e a mensagem dele não diz por quê."""
         ctx, _ = _contexto()
 
-        with pytest.raises(InteractionStateError, match="resposta inicial"):
-            await ctx.follow_up("x")
+        with pytest.raises(InvalidInteractionState, match="resposta inicial"):
+            await ctx.followup("x")
 
-    async def test_follow_up_depois_de_defer_funciona(self) -> None:
+    async def test_followup_depois_de_defer_funciona(self) -> None:
         ctx, api = _contexto()
         await ctx.defer()
 
-        await ctx.follow_up("extra")
+        await ctx.followup("extra")
 
         assert api.nomes == ["defer", "followup"]
+
+
+# --------------------------------------------------------------------------
+# delete_original_response -> COMPLETED
+# --------------------------------------------------------------------------
+
+
+class TestCompleted:
+    async def test_delete_de_answered_vai_para_completed(self) -> None:
+        """Apagada a resposta original, não há mais o que editar nela."""
+        ctx, api = _contexto()
+        await ctx.respond("oi")
+
+        await ctx.delete_original_response()
+
+        assert ctx.state is InteractionState.COMPLETED
+        assert api.nomes == ["respond", "delete_message"]
+
+    async def test_delete_de_deferred_tambem(self) -> None:
+        ctx, _ = _contexto()
+        await ctx.defer()
+
+        await ctx.delete_original_response()
+
+        assert ctx.state is InteractionState.COMPLETED
+
+    async def test_edit_de_completed_e_erro(self) -> None:
+        ctx, _ = _contexto()
+        await ctx.respond("oi")
+        await ctx.delete_original_response()
+
+        with pytest.raises(InvalidInteractionState, match="apagada"):
+            await ctx.edit_original_response("x")
+
+    async def test_followup_de_completed_funciona(self) -> None:
+        """O follow-up é outro webhook message, não a resposta original."""
+        ctx, api = _contexto()
+        await ctx.respond("oi")
+        await ctx.delete_original_response()
+
+        await ctx.followup("ainda dá")
+
+        assert api.nomes == ["respond", "delete_message", "followup"]
+
+
+# --------------------------------------------------------------------------
+# Expiração — o token vale 15 minutos
+# --------------------------------------------------------------------------
+
+
+class TestExpirado:
+    def test_id_sintetico_nunca_expira(self) -> None:
+        """`id=1` não é snowflake — julgar a idade dele seria inventar
+        uma resposta para uma pergunta que o dado não faz."""
+        ctx, _ = _contexto(id=1)
+
+        assert ctx.is_expired() is False
+        assert ctx.state is InteractionState.UNANSWERED
+
+    def test_token_de_16_minutos_esta_expirado(self) -> None:
+        ctx, _ = _contexto(id=_snowflake_de(16 * 60 * 1000))
+
+        assert ctx.is_expired() is True
+        assert ctx.state is InteractionState.EXPIRED
+
+    def test_token_fresco_nao(self) -> None:
+        ctx, _ = _contexto(id=_snowflake_de(60 * 1000))
+
+        assert ctx.is_expired() is False
+        assert ctx.state is not InteractionState.EXPIRED
+
+    async def test_operacao_com_token_expirado_e_erro(self) -> None:
+        """Nenhum callback funciona mais — e a mensagem diz isso, não a
+        ordem das chamadas."""
+        ctx, api = _contexto(id=_snowflake_de(16 * 60 * 1000))
+
+        with pytest.raises(InvalidInteractionState, match="expirado"):
+            await ctx.respond("oi")
+
+        assert api.nomes == []
+
+    async def test_followup_com_token_expirado_tambem(self) -> None:
+        ctx, api = _contexto(id=_snowflake_de(16 * 60 * 1000))
+
+        with pytest.raises(InvalidInteractionState, match="expirado"):
+            await ctx.followup("x")
+
+        assert api.nomes == []
+
+    def test_expiracao_nao_atrapalha_o_fluxo_normal(self) -> None:
+        """Snowflake de verdade e dentro da validade: a expiração é
+        pergunta respondida com "não", não um guarda a mais no caminho."""
+        ctx, _ = _contexto(id=_snowflake_de(60 * 1000))
+
+        assert ctx.state is InteractionState.UNANSWERED
+        assert ctx.is_expired() is False
 
 
 # --------------------------------------------------------------------------
@@ -274,7 +379,7 @@ class TestAck:
 
     async def test_ack_de_answered_e_noop(self) -> None:
         ctx, api = _contexto()
-        await ctx.reply("oi")
+        await ctx.respond("oi")
 
         await ctx.ack()
 
@@ -283,11 +388,11 @@ class TestAck:
 
     async def test_ack_de_modal_e_noop(self) -> None:
         ctx, api = _contexto()
-        await ctx.send_modal({"title": "x"})
+        await ctx.open_modal({"title": "x"})
 
         await ctx.ack()
 
-        assert ctx.state is InteractionState.MODAL
+        assert ctx.state is InteractionState.MODAL_OPENED
         assert api.nomes == ["show_modal"]
 
 
@@ -307,7 +412,7 @@ class TestEphemeral:
     async def test_segunda_resposta_ephemeral_e_erro_de_estado(self) -> None:
         """O `0016` dizia que flag repetida é ok e contraditória é
         `ValueError` — mas isso é inalcançável: a segunda resposta já é
-        `InteractionStateError` **antes** de qualquer comparação de
+        `InvalidInteractionState` **antes** de qualquer comparação de
         flag.
 
         Este teste é a prova de que a máquina de estados cobre o caso,
@@ -317,7 +422,7 @@ class TestEphemeral:
         ctx, api = _contexto()
         await ctx.defer(ephemeral=True)
 
-        with pytest.raises(InteractionStateError):
+        with pytest.raises(InvalidInteractionState):
             await ctx.defer(ephemeral=False)
 
         assert api.nomes == ["defer"]
@@ -329,7 +434,7 @@ class TestEphemeral:
 
 
 class TestFalhaDaApi:
-    async def test_reply_que_falha_nao_muda_estado(self) -> None:
+    async def test_respond_que_falha_nao_muda_estado(self) -> None:
         """Se a requisição falhou, a interação **não** foi respondida.
         Avançar o estado aqui faria o dispatcher achar que já respondeu
         e engolir o erro."""
@@ -337,7 +442,7 @@ class TestFalhaDaApi:
         api.quebra = RuntimeError("sem rede")
 
         with pytest.raises(RuntimeError, match="sem rede"):
-            await ctx.reply("oi")
+            await ctx.respond("oi")
 
         assert ctx.state is InteractionState.UNANSWERED
 
@@ -356,10 +461,10 @@ class TestFalhaDaApi:
         api.quebra = RuntimeError("sem rede")
 
         with pytest.raises(RuntimeError):
-            await ctx.reply("oi")
+            await ctx.respond("oi")
 
         api.quebra = None
-        await ctx.reply("agora vai")
+        await ctx.respond("agora vai")
 
         assert ctx.state is InteractionState.ANSWERED
         assert api.nomes == ["respond"]
@@ -373,7 +478,9 @@ class TestFalhaDaApi:
 class TestTabela:
     def test_todo_estado_tem_entradas(self) -> None:
         """Cada estado tem uma linha — sem entrada, a ação é proibida,
-        e isso é a regra, não um esquecimento."""
+        e isso é a regra, não um esquecimento. `EXPIRED` é a exceção
+        honesta: ele não transiciona para nada, e a linha vazia é o
+        contrato."""
         assert set(_TRANSICOES) == set(InteractionState)
 
     def test_unanswered_so_tem_resposta_inicial(self) -> None:
@@ -382,17 +489,21 @@ class TestTabela:
         linha = _TRANSICOES[InteractionState.UNANSWERED]
 
         assert set(linha) == {
-            "reply",
+            "respond",
             "defer",
             "defer_update",
             "update",
-            "send_modal",
+            "open_modal",
             "launch_activity",
             "ack",
         }
 
     def test_modal_nao_tem_saida_de_resposta(self) -> None:
         """Terminal: só `ack` continua funcionando, e como no-op."""
-        linha = _TRANSICOES[InteractionState.MODAL]
+        linha = _TRANSICOES[InteractionState.MODAL_OPENED]
 
         assert set(linha) == {"ack"}
+
+    def test_expired_nao_transiciona(self) -> None:
+        """Token vencido — não há mais nenhuma ação possível."""
+        assert _TRANSICOES[InteractionState.EXPIRED] == {}

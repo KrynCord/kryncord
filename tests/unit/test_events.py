@@ -23,12 +23,12 @@ import pytest
 from kryncord.errors import BlockHandlers, EventDefinitionError
 from kryncord.events import (
     EVENT_PAYLOADS,
-    EventContext,
     EventDispatcher,
     EventName,
     event,
     normalize_event_name,
 )
+from kryncord.events.context import EventFrame
 from kryncord.events.payloads import id_de, ids_de, monta_args
 from kryncord.events.snapshot import EVENTOS_COM_OLD, instantanea
 from kryncord.internal.compose import block, compose
@@ -252,42 +252,42 @@ class TestInstantanea:
 
 
 # ==========================================================================
-# EventContext
+# EventFrame
 # ==========================================================================
 
 
 class TestContexto:
     def test_normaliza_o_nome(self) -> None:
-        ctx = EventContext("MESSAGE_CREATE", [])
+        frame = EventFrame("MESSAGE_CREATE", [])
 
-        assert ctx.name == "message_create"
+        assert frame.name == "message_create"
 
     def test_args_e_list_e_mutavel(self) -> None:
         """A injeção de argumentos da ideia 10 §6 precisa de lista viva.
         Tupla imutável faria a injeção falhar em silêncio."""
-        ctx = EventContext("message_create", ["a"])
-        ctx.args[0] = "b"
+        frame = EventFrame("message_create", ["a"])
+        frame.args[0] = "b"
 
-        assert ctx.args == ["b"]
+        assert frame.args == ["b"]
 
     def test_state_nasce_vazio_e_e_do_dispatch(self) -> None:
-        ctx = EventContext("message_create", [])
+        frame = EventFrame("message_create", [])
 
-        assert ctx.state == {}
+        assert frame.state == {}
 
     def test_state_recebido_e_o_mesmo_objeto(self) -> None:
         """Compartilhado por dispatch (`0026` §D6) — a middleware
         escreve, o handler lê, e os dois estão no mesmo dicionário."""
         compartilhado: dict[str, Any] = {}
-        ctx = EventContext("message_create", [], state=compartilhado)
-        ctx.state["chave"] = 1
+        frame = EventFrame("message_create", [], state=compartilhado)
+        frame.state["chave"] = 1
 
         assert compartilhado == {"chave": 1}
 
     async def test_spawn_sem_registry_e_erro(self) -> None:
         """Task sem dono sobrevive ao client, e é o oposto do que
         "background" promete (0012)."""
-        ctx = EventContext("message_create", [])
+        frame = EventFrame("message_create", [])
 
         async def nada() -> None:
             return None
@@ -295,18 +295,18 @@ class TestContexto:
         coro = nada()
         try:
             with pytest.raises(RuntimeError, match="TaskRegistry"):
-                ctx.spawn(coro)
+                frame.spawn(coro)
         finally:
             coro.close()
 
     async def test_spawn_com_registry_devolve_task(self) -> None:
         tasks = TaskRegistry()
-        ctx = EventContext("message_create", [], tasks=tasks)
+        frame = EventFrame("message_create", [], tasks=tasks)
 
         async def nada() -> None:
             return None
 
-        tarefa = ctx.spawn(nada(), nome="teste")
+        tarefa = frame.spawn(nada(), nome="teste")
 
         try:
             await asyncio.wait_for(tarefa, timeout=1)
@@ -314,10 +314,10 @@ class TestContexto:
             await tasks.cancela_todas()
 
     def test_repr_mostra_o_que_importa(self) -> None:
-        ctx = EventContext("message_create", ["a", "b"])
+        frame = EventFrame("message_create", ["a", "b"])
 
-        assert "message_create" in repr(ctx)
-        assert "args=2" in repr(ctx)
+        assert "message_create" in repr(frame)
+        assert "args=2" in repr(frame)
 
 
 # ==========================================================================
@@ -331,7 +331,7 @@ class TestDecorator:
         e qualquer teste que inspeciona a função — sem ganhar nada."""
         dispatcher = EventDispatcher()
 
-        async def meu(ctx: EventContext, msg: Message) -> None: ...
+        async def meu(msg: Message) -> None: ...
 
         registrado = event("message_create", registry=dispatcher)(meu)
 
@@ -343,11 +343,10 @@ class TestDecorator:
         dispatcher = EventDispatcher()
 
         @event("ready", registry=dispatcher)
-        async def pronto(ctx: EventContext, r: Ready) -> None: ...
+        async def pronto(r: Ready) -> None: ...
 
         entrada = dispatcher._entradas_de("ready")[0]
         assert entrada.once is True
-        assert entrada.with_context is True
 
     def test_ready_com_once_false_e_erro(self) -> None:
         dispatcher = EventDispatcher()
@@ -355,7 +354,7 @@ class TestDecorator:
         with pytest.raises(EventDefinitionError, match="once=True"):
 
             @event("ready", once=False, registry=dispatcher)
-            async def pronto(ctx: EventContext, r: Ready) -> None: ...
+            async def pronto(r: Ready) -> None: ...
 
     def test_evento_inexistente_e_erro_com_sugestao(self) -> None:
         """Aceitar qualquer nome faria o handler nunca rodar em
@@ -365,22 +364,22 @@ class TestDecorator:
         with pytest.raises(EventDefinitionError, match="Quer dizer"):
 
             @event("message_creates", registry=dispatcher)
-            async def errado(ctx: EventContext, msg: Message) -> None: ...
+            async def errado(msg: Message) -> None: ...
 
     def test_aridade_errada_e_erro_na_importacao(self) -> None:
         dispatcher = EventDispatcher()
 
-        with pytest.raises(EventDefinitionError, match="recebe 1 argumento"):
+        with pytest.raises(EventDefinitionError, match="recebe 0 argumento"):
 
             @event("message_create", registry=dispatcher)
-            async def curto(ctx: EventContext) -> None: ...
+            async def curto() -> None: ...
 
     def test_args_pula_a_validacao_de_aridade(self) -> None:
         """`K9`: quem escreveu `*args` disse que não quer número nenhum."""
         dispatcher = EventDispatcher()
 
         @event("message_create", registry=dispatcher)
-        async def generico(ctx: EventContext, *args: Any) -> None: ...
+        async def generico(*args: Any) -> None: ...
 
         assert len(dispatcher.handlers_for("message_create")) == 1
 
@@ -392,14 +391,14 @@ class TestDecorator:
         with pytest.raises(EventDefinitionError, match="não bate com a tabela"):
 
             @event("message_update", registry=dispatcher)
-            async def errado(ctx: EventContext, old: str, new: Message) -> None: ...
+            async def errado(old: str, new: Message) -> None: ...
 
     def test_anotacao_any_passa(self) -> None:
         """A anotação é ganho de editor, não contrato de runtime."""
         dispatcher = EventDispatcher()
 
         @event("message_update", registry=dispatcher)
-        async def generico(ctx: EventContext, old: Any, new: Any) -> None: ...
+        async def generico(old: Any, new: Any) -> None: ...
 
         assert len(dispatcher.handlers_for("message_update")) == 1
 
@@ -407,7 +406,7 @@ class TestDecorator:
         dispatcher = EventDispatcher()
 
         @event("message_update", registry=dispatcher)
-        async def certo(ctx: EventContext, old: Message | None, new: Message) -> None: ...
+        async def certo(old: Message | None, new: Message) -> None: ...
 
         assert len(dispatcher.handlers_for("message_update")) == 1
 
@@ -415,30 +414,36 @@ class TestDecorator:
         dispatcher = EventDispatcher()
 
         @event("message_create", name="observador", registry=dispatcher)
-        async def generico(ctx: EventContext, msg: Message) -> None: ...
+        async def generico(msg: Message) -> None: ...
 
         assert dispatcher._entradas_de("message_create")[0].label == "observador"
 
 
 # ==========================================================================
-# Despacho com contexto
+# Despacho
 # ==========================================================================
 
 
 class TestDespacho:
-    async def test_event_context_vem_primeiro(self) -> None:
+    async def test_event_frame_vem_primeiro_na_middleware(self) -> None:
+        """O handler recebe o payload só (`0031`) — quem vê o quadro
+        primeiro é a middleware, que recebe `(frame, block)`."""
         dispatcher = EventDispatcher()
         recebido: list[Any] = []
-        dispatcher.add("MESSAGE_CREATE", coletor(recebido), with_context=True)
+        quadros: list[Any] = []
+        dispatcher.add("MESSAGE_CREATE", coletor(recebido))
 
-        await dispatcher.dispatch("MESSAGE_CREATE", MESSAGE_CREATE)
+        async def observa(frame: Any, _block: Any) -> None:
+            quadros.append(frame)
 
-        assert isinstance(recebido[0][0], EventContext)
-        assert isinstance(recebido[0][1], Message)
+        await dispatcher.dispatch("MESSAGE_CREATE", MESSAGE_CREATE, middleware=[observa])
+
+        assert isinstance(quadros[0], EventFrame)
+        assert isinstance(recebido[0][0], Message)
 
     async def test_sem_contexto_continua_recebendo_só_o_objeto(self) -> None:
-        """O `client.on` não ganhou contexto: uma tabela, dois caminhos,
-        e a diferença é o `ctx` (`0020`)."""
+        """Um contrato para os dois caminhos (`0031`): `client.on` e
+        `@event` recebem o payload só, sem contexto na frente."""
         dispatcher = EventDispatcher()
         recebido: list[Any] = []
         dispatcher.add("MESSAGE_CREATE", coletor(recebido))
@@ -472,15 +477,15 @@ class TestDespacho:
     async def test_erro_do_handler_vai_para_on_error(self) -> None:
         dispatcher = EventDispatcher()
 
-        async def quebra(ctx: EventContext, msg: Message) -> None:
+        async def quebra(msg: Message) -> None:
             raise RuntimeError("boom")
 
         erros: list[BaseException] = []
 
-        async def captura(ctx: Any, exc: BaseException) -> None:
+        async def captura(frame: Any, exc: BaseException) -> None:
             erros.append(exc)
 
-        dispatcher.add("MESSAGE_CREATE", quebra, with_context=True)
+        dispatcher.add("MESSAGE_CREATE", quebra)
 
         await dispatcher.dispatch("MESSAGE_CREATE", MESSAGE_CREATE, on_error=captura)
 
@@ -488,15 +493,15 @@ class TestDespacho:
         assert isinstance(erros[0], RuntimeError)
 
     async def test_middleware_injeta_argumento(self) -> None:
-        """O recurso da ideia 10 §8: escrever em `ctx.args[0]` muda o
+        """O recurso da ideia 10 §8: escrever em `frame.args[0]` muda o
         que os handlers seguintes recebem — e só funciona com lista viva.
         """
         dispatcher = EventDispatcher()
         recebido: list[Any] = []
         dispatcher.add("MESSAGE_CREATE", coletor(recebido))
 
-        async def troca(ctx: Any, _block: Any) -> None:
-            ctx.args[0] = "substituido"
+        async def troca(frame: Any, _block: Any) -> None:
+            frame.args[0] = "substituido"
 
         await dispatcher.dispatch("MESSAGE_CREATE", MESSAGE_CREATE, middleware=[troca])
 
@@ -507,7 +512,7 @@ class TestDespacho:
         recebido: list[Any] = []
         dispatcher.add("MESSAGE_CREATE", coletor(recebido))
 
-        async def para(_ctx: Any, _block: Any) -> None:
+        async def para(_frame: Any, _block: Any) -> None:
             block()
 
         await dispatcher.dispatch("MESSAGE_CREATE", MESSAGE_CREATE, middleware=[para])
@@ -523,7 +528,7 @@ class TestDespacho:
         dispatcher.add("MESSAGE_CREATE", coletor(passou))
         dispatcher.add("MESSAGE_CREATE", coletor(filtrado), tags=("manha",))
 
-        async def para_manha(_ctx: Any, _block: Any) -> None:
+        async def para_manha(_frame: Any, _block: Any) -> None:
             block("manha")
 
         await dispatcher.dispatch("MESSAGE_CREATE", MESSAGE_CREATE, middleware=[para_manha])
@@ -538,13 +543,13 @@ class TestDespacho:
         depois: list[Any] = []
         erros: list[Any] = []
 
-        async def para(ctx: EventContext, msg: Message) -> None:
+        async def para(msg: Message) -> None:
             block()
 
-        async def captura(ctx: Any, exc: BaseException) -> None:
+        async def captura(frame: Any, exc: BaseException) -> None:
             erros.append(exc)
 
-        dispatcher.add("MESSAGE_CREATE", para, with_context=True)
+        dispatcher.add("MESSAGE_CREATE", para)
         dispatcher.add("MESSAGE_CREATE", coletor(depois))
 
         await dispatcher.dispatch("MESSAGE_CREATE", MESSAGE_CREATE, on_error=captura)
@@ -573,15 +578,15 @@ class TestDespacho:
         dispatcher = EventDispatcher()
         tentativas: list[int] = []
 
-        async def instavel(ctx: EventContext, msg: Message) -> None:
+        async def instavel(msg: Message) -> None:
             tentativas.append(1)
             if len(tentativas) == 1:
                 raise RuntimeError("transitório")
 
-        async def ignora(ctx: Any, exc: BaseException) -> None:
+        async def ignora(frame: Any, exc: BaseException) -> None:
             return None
 
-        dispatcher.add("MESSAGE_CREATE", instavel, with_context=True, once=True)
+        dispatcher.add("MESSAGE_CREATE", instavel, once=True)
 
         await dispatcher.dispatch("MESSAGE_CREATE", MESSAGE_CREATE, on_error=ignora)
         await dispatcher.dispatch("MESSAGE_CREATE", MESSAGE_CREATE, on_error=ignora)
@@ -589,14 +594,23 @@ class TestDespacho:
         assert len(tentativas) == 2
 
     async def test_state_e_o_mesmo_dict_no_dispatch(self) -> None:
+        """O `state` entregue ao dispatch é o mesmo dicionário que o
+        quadro carrega — o handler não o vê (`0031`), então quem o vê
+        aqui é a middleware."""
         dispatcher = EventDispatcher()
         recebido: list[Any] = []
-        dispatcher.add("MESSAGE_CREATE", coletor(recebido), with_context=True)
+        quadros: list[Any] = []
+        dispatcher.add("MESSAGE_CREATE", coletor(recebido))
+
+        async def observa(frame: Any, _block: Any) -> None:
+            quadros.append(frame)
 
         compartilhado: dict[str, Any] = {}
-        await dispatcher.dispatch("MESSAGE_CREATE", MESSAGE_CREATE, state=compartilhado)
+        await dispatcher.dispatch(
+            "MESSAGE_CREATE", MESSAGE_CREATE, state=compartilhado, middleware=[observa]
+        )
 
-        recebido[0][0].state["chave"] = 1
+        quadros[0].state["chave"] = 1
         assert compartilhado == {"chave": 1}
 
 

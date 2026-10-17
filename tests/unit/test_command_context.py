@@ -1,17 +1,22 @@
-"""`CommandContext` e `OptionsAccessor` — `0012`.
+"""`CommandInteraction` e `OptionsAccessor` — `0012`, tipada no `0031`.
 
-O fio: `CommandContext` **compõe** o `InteractionContext`, não herda.
-`ctx.reply()` é delegação — e a prova é que a máquina de estados decide
-tudo, neste arquivo só se testa que a delegação chega lá.
+O fio: a interação tipada **compõe** o `InteractionContext`, não herda.
+`interaction.respond()` é delegação — e a prova é que a máquina de
+estados decide tudo, neste arquivo só se testa que a delegação chega lá.
 """
 
 from __future__ import annotations
 
 import pytest
 
-from kryncord.commands import CommandContext
-from kryncord.errors import InteractionStateError
-from kryncord.interactions import InteractionContext, InteractionState
+from kryncord.errors import InvalidInteractionState
+from kryncord.interactions import (
+    CommandInteraction,
+    InteractionContext,
+    InteractionState,
+    MessageCommandInteraction,
+    UserCommandInteraction,
+)
 from kryncord.models.interaction import Interaction
 
 APP = 111
@@ -73,11 +78,16 @@ def _interacao(opcoes: list[dict] | None = None, data_extra: dict | None = None)
 
 
 def _contexto(
-    opcoes: list[dict] | None = None, data_extra: dict | None = None
-) -> tuple[CommandContext, ApiFalsa]:
+    opcoes: list[dict] | None = None,
+    data_extra: dict | None = None,
+    *,
+    classe: type[CommandInteraction] = CommandInteraction,
+) -> tuple[CommandInteraction, ApiFalsa]:
+    """A interação tipada e o dublê de API — a classe vem do tipo de
+    comando registrado (`0031`), nunca da anotação do handler."""
     api = ApiFalsa()
     ic = InteractionContext(_interacao(opcoes, data_extra), api)
-    return CommandContext(ic, client=None), api
+    return classe(ic, client=None), api
 
 
 # --------------------------------------------------------------------------
@@ -86,16 +96,16 @@ def _contexto(
 
 
 class TestDelegacao:
-    async def test_reply_chega_na_maquina(self) -> None:
+    async def test_respond_chega_na_maquina(self) -> None:
         """A prova da composição: o estado muda porque o
-        `InteractionContext` decidiu, não porque o contexto de comando
+        `InteractionContext` decidiu, não porque a interação tipada
         reimplementou."""
         ctx, api = _contexto()
 
-        await ctx.reply("oi")
+        await ctx.respond("oi")
 
         assert ctx.is_responded() is True
-        assert ctx.state_resposta is InteractionState.ANSWERED
+        assert ctx.response_state is InteractionState.ANSWERED
         assert api.chamadas == ["respond"]
 
     async def test_defer_tambem(self) -> None:
@@ -109,17 +119,17 @@ class TestDelegacao:
     async def test_transicao_proibida_propaga(self) -> None:
         """Não é `except` e re-levar: o erro da máquina chega como está."""
         ctx, _ = _contexto()
-        await ctx.reply("oi")
+        await ctx.respond("oi")
 
-        with pytest.raises(InteractionStateError):
-            await ctx.reply("de novo")
+        with pytest.raises(InvalidInteractionState):
+            await ctx.respond("de novo")
 
-    async def test_edit_e_follow_up_chegam(self) -> None:
+    async def test_edit_e_followup_chegam(self) -> None:
         ctx, api = _contexto()
         await ctx.defer()
 
-        await ctx.edit("pronto")
-        await ctx.follow_up("extra")
+        await ctx.edit_original_response("pronto")
+        await ctx.followup("extra")
 
         assert api.chamadas == ["defer", "edit_message", "followup"]
 
@@ -153,16 +163,6 @@ class TestCampos:
 
         assert ctx.state["chave"] == 1
         assert ctx.state is ctx.state
-
-    def test_args_nasce_vazio_e_e_mutavel(self) -> None:
-        """A mutação propaga para os próximos handlers no modo
-        sequential — é recurso da `10` §8, não bug."""
-        ctx, _ = _contexto()
-
-        ctx.args.append("a")
-        ctx.args[0] = "b"
-
-        assert ctx.args == ["b"]
 
     def test_guild_channel_member_podem_ser_none(self) -> None:
         """DM não tem guild nem membro — e não é erro, é o caso."""
@@ -427,29 +427,37 @@ class TestGettersDeEntidade:
 class TestAlvoDeMenu:
     def test_target_user_vem_do_resolved(self) -> None:
         ctx, _ = _contexto(
-            data_extra={"resolved": {"users": {"42": {"id": "42", "username": "ana"}}}}
+            data_extra={"resolved": {"users": {"42": {"id": "42", "username": "ana"}}}},
+            classe=UserCommandInteraction,
         )
 
-        assert ctx.target_user == {"id": "42", "username": "ana"}
+        assert ctx.target_user.id == 42
+        assert ctx.target_user.username == "ana"
 
     def test_target_message_vem_do_resolved(self) -> None:
         ctx, _ = _contexto(
-            data_extra={"resolved": {"messages": {"7": {"id": "7", "content": "oi"}}}}
+            data_extra={"resolved": {"messages": {"7": {"id": "7", "content": "oi"}}}},
+            classe=MessageCommandInteraction,
         )
 
-        assert ctx.target_message == {"id": "7", "content": "oi"}
+        assert ctx.target_message.id == 7
+        assert ctx.target_message.content == "oi"
 
     def test_em_slash_e_attribute_error(self) -> None:
-        """O alvo vem do clique — `/comando` não tem alvo, e o erro
-        tem que dizer isso, não "atributo inexistente"."""
+        """O alvo vem do clique — em `/comando` a classe de CHAT_INPUT
+        nem expõe `target_user`, e o `AttributeError` aponta para o
+        campo faltante."""
         ctx, _ = _contexto()
 
-        with pytest.raises(AttributeError, match="CHAT_INPUT"):
+        with pytest.raises(AttributeError, match="target_user"):
             _ = ctx.target_user
 
     def test_target_member_sem_cache_e_none(self) -> None:
-        """Sem `members` no resolved — o cache pode não ter guardado."""
-        ctx, _ = _contexto(data_extra={"resolved": {"users": {"42": {}}}})
+        """Sem `members` no resolved — o cache pode não ter guardado, e
+        aí o alvo é `None`."""
+        ctx, _ = _contexto(
+            data_extra={"resolved": {"users": {"42": {}}}},
+            classe=UserCommandInteraction,
+        )
 
-        with pytest.raises(AttributeError):
-            _ = ctx.target_member
+        assert ctx.target_member is None

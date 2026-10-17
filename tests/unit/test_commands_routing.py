@@ -21,13 +21,13 @@ from typing import Any
 
 import pytest
 
-from kryncord import CommandContext, EventContext, command, create_command, event
+from kryncord import AutocompleteInteraction, CommandInteraction, command, create_command, event
 from kryncord.client import Client
 from kryncord.commands.dispatch import dispatch_application_command, instancia_de
 from kryncord.commands.registry import CommandRegistry
-from kryncord.config import CommandOptions, Config, ResponderOptions
+from kryncord.config import CommandOptions, Config, EventOptions, ResponderOptions
 from kryncord.enums import ApplicationCommandType, InteractionType, ResponderType
-from kryncord.errors import CommandDefinitionError, DispatchError
+from kryncord.errors import CommandDefinitionError, DispatchError, HandlerSignatureError
 from kryncord.intents import Intents
 from kryncord.interactions.dispatch import dispatch_interaction
 from kryncord.models.interaction import Interaction
@@ -171,7 +171,7 @@ class TestTabelaDeEscopo:
         reg = CommandRegistry()
 
         @command(name="ping", description="Ping", registry=reg)
-        async def ping(ctx: CommandContext) -> None: ...
+        async def ping(ctx: CommandInteraction) -> None: ...
 
         inst = reg.get(CHAT, "ping", None)
         assert inst is not None
@@ -179,12 +179,13 @@ class TestTabelaDeEscopo:
         assert ping.__name__ == "ping"
 
     def test_decorator_sem_parametro_e_erro(self) -> None:
-        """`async def ping()` registraria um comando que falharia com
-        `TypeError` em cada clique, e a mensagem do Discord não diria
-        nada sobre `inspect.signature`."""
+        """`async def ping()` registraria um comando sem ninguém para
+        receber a interação — o registro falha na importação
+        (`HandlerSignatureError`, `0031`), não a cada clique com o
+        `TypeError` que a mensagem do Discord não explica."""
         reg = CommandRegistry()
 
-        with pytest.raises(TypeError, match="não aceita argumentos"):
+        with pytest.raises(HandlerSignatureError, match="sem parâmetros"):
 
             @command(name="ping", description="Ping", registry=reg)
             async def ping() -> None: ...
@@ -195,7 +196,7 @@ class TestTabelaDeEscopo:
         with pytest.raises(TypeError, match="async def"):
 
             @command(name="ping", description="Ping", registry=reg)
-            def ping(ctx: CommandContext) -> None: ...  # type: ignore[misc]
+            def ping(ctx: CommandInteraction) -> None: ...  # type: ignore[misc]
 
 
 # ==========================================================================
@@ -266,12 +267,12 @@ class TestCadeia:
         reg, inst = cria("loja")
 
         @inst
-        async def raiz(ctx: CommandContext) -> str:
+        async def raiz(ctx: CommandInteraction) -> str:
             return "saldo=10"
 
         recebido: list[str] = []
 
-        async def ver(ctx: CommandContext, valor: str) -> None:
+        async def ver(ctx: CommandInteraction, valor: str) -> None:
             recebido.append(valor)
 
         inst.sub("ver", ver)
@@ -292,7 +293,7 @@ class TestCadeia:
 
         recebido: list[Any] = []
 
-        async def ver(ctx: CommandContext, valor: Any) -> None:
+        async def ver(ctx: CommandInteraction, valor: Any) -> None:
             recebido.append(valor)
 
         inst.sub("ver", ver)
@@ -311,12 +312,12 @@ class TestCadeia:
         reg, inst = cria("loja")
 
         @inst
-        async def raiz(ctx: CommandContext) -> str:
+        async def raiz(ctx: CommandInteraction) -> str:
             return "não quero isso"
 
         chamou: list[str] = []
 
-        async def ver(ctx: CommandContext) -> None:
+        async def ver(ctx: CommandInteraction) -> None:
             chamou.append("sim")
 
         inst.sub("ver", ver)
@@ -335,10 +336,10 @@ class TestCadeia:
         reg, inst = cria("loja")
 
         @inst
-        async def raiz(ctx: CommandContext) -> str:
+        async def raiz(ctx: CommandInteraction) -> str:
             return "texto"
 
-        async def ver(ctx: CommandContext, valor: int) -> None: ...
+        async def ver(ctx: CommandInteraction, valor: int) -> None: ...
 
         inst.sub("ver", ver)
 
@@ -369,7 +370,7 @@ class TestCadeia:
 
         recebido: list[Any] = []
 
-        async def ver(ctx: CommandContext, valor: str | None) -> None:
+        async def ver(ctx: CommandInteraction, valor: str | None) -> None:
             recebido.append(valor)
 
         inst.sub("ver", ver)
@@ -387,12 +388,12 @@ class TestCadeia:
         reg, inst = cria("loja")
 
         @inst
-        async def raiz(ctx: CommandContext) -> int:
+        async def raiz(ctx: CommandInteraction) -> int:
             return 42
 
         recebido: list[Any] = []
 
-        async def ver(ctx: CommandContext, *args: Any) -> None:
+        async def ver(ctx: CommandInteraction, *args: Any) -> None:
             recebido.append(args)
 
         inst.sub("ver", ver)
@@ -406,16 +407,17 @@ class TestCadeia:
         assert recebido == [(42,)]
 
     async def test_sem_anotacao_passa_como_esta(self) -> None:
-        """A anotação é ganho de editor, não contrato de runtime."""
+        """A anotação do valor é ganho de editor, não contrato de
+        runtime (`0031` só exige a do primeiro parâmetro)."""
         reg, inst = cria("loja")
 
         @inst
-        async def raiz(ctx: CommandContext) -> list[int]:
+        async def raiz(ctx: CommandInteraction) -> list[int]:
             return [1, 2]
 
         recebido: list[Any] = []
 
-        async def ver(ctx: CommandContext, valor) -> None:
+        async def ver(ctx: CommandInteraction, valor) -> None:
             recebido.append(valor)
 
         inst.sub("ver", ver)
@@ -434,16 +436,16 @@ class TestCadeia:
         reg, inst = cria("papel")
 
         @inst
-        async def raiz(ctx: CommandContext) -> str:
+        async def raiz(ctx: CommandInteraction) -> str:
             return "membro"
 
         chamou: list[Any] = []
 
-        async def no_grupo(ctx: CommandContext, valor: str) -> str:
+        async def no_grupo(ctx: CommandInteraction, valor: str) -> str:
             chamou.append(("grupo", valor))
             return valor.upper()
 
-        async def dar(ctx: CommandContext, valor: str) -> None:
+        async def dar(ctx: CommandInteraction, valor: str) -> None:
             chamou.append(("sub", valor))
 
         # `.handler()` devolve o próprio handler — ele também é
@@ -469,12 +471,12 @@ class TestCadeia:
         reg, inst = cria("papel")
 
         @inst
-        async def raiz(ctx: CommandContext) -> str:
+        async def raiz(ctx: CommandInteraction) -> str:
             return "membro"
 
         chamou: list[Any] = []
 
-        async def dar(ctx: CommandContext, valor: str) -> None:
+        async def dar(ctx: CommandInteraction, valor: str) -> None:
             chamou.append(valor)
 
         inst.group("add").add("dar", dar)
@@ -496,7 +498,7 @@ class TestCadeia:
         reg, inst = cria("loja")
 
         @inst
-        async def raiz(ctx: CommandContext) -> None:
+        async def raiz(ctx: CommandInteraction) -> None:
             return None
 
         erros: list[BaseException] = []
@@ -521,7 +523,7 @@ class TestCadeia:
         reg, inst = cria("loja")
 
         @inst
-        async def raiz(ctx: CommandContext) -> None:
+        async def raiz(ctx: CommandInteraction) -> None:
             chamou.append("raiz")
 
         chamou: list[str] = []
@@ -547,7 +549,7 @@ class TestDispatchApplicationCommand:
         rodou: list[Any] = []
 
         @inst
-        async def ping(ctx: CommandContext) -> None:
+        async def ping(ctx: CommandInteraction) -> None:
             rodou.append(ctx)
 
         ok = await dispatch_application_command(interacao("ping"), _ApiFalsa(), registry=reg)
@@ -586,7 +588,7 @@ class TestDispatchApplicationCommand:
         reg, inst = cria("ping")
 
         @inst
-        async def ping(ctx: CommandContext) -> None:
+        async def ping(ctx: CommandInteraction) -> None:
             raise RuntimeError("boom")
 
         erros: list[BaseException] = []
@@ -608,7 +610,7 @@ class TestDispatchApplicationCommand:
         reg, inst = cria("ping")
 
         @inst
-        async def ping(ctx: CommandContext) -> None: ...
+        async def ping(ctx: CommandInteraction) -> None: ...
 
         erros: list[BaseException] = []
 
@@ -634,7 +636,7 @@ class TestDispatchApplicationCommand:
         ordem: list[str] = []
 
         @inst
-        async def ping(ctx: CommandContext) -> None:
+        async def ping(ctx: CommandInteraction) -> None:
             ordem.append("handler")
 
         async def antes(ctx: Any, block: Any) -> None:
@@ -668,7 +670,7 @@ class TestDispatchApplicationCommand:
         )
 
         @inst
-        async def ping(ctx: CommandContext) -> None:
+        async def ping(ctx: CommandInteraction) -> None:
             ordem.append("handler")
 
         await dispatch_application_command(
@@ -686,7 +688,7 @@ class TestDispatchApplicationCommand:
         reg, inst = cria("ping")
 
         @inst
-        async def ping(ctx: CommandContext) -> None:
+        async def ping(ctx: CommandInteraction) -> None:
             ctx.state["chave"] = "do-comando"
 
         compartilhado: dict[str, Any] = {}
@@ -737,7 +739,7 @@ class TestOnErrorPorComando:
         inst = create_command(name="ping", description="Ping", registry=reg, on_error=local)
 
         @inst
-        async def ping(ctx: CommandContext) -> None:
+        async def ping(ctx: CommandInteraction) -> None:
             raise RuntimeError("boom")
 
         await dispatch_application_command(
@@ -754,7 +756,7 @@ class TestOnErrorPorComando:
             rodou.append("options")
 
         @inst
-        async def ping(ctx: CommandContext) -> None:
+        async def ping(ctx: CommandInteraction) -> None:
             raise RuntimeError("boom")
 
         await dispatch_application_command(
@@ -805,7 +807,7 @@ def _registro_com(botao: bool = True) -> tuple[Registry, dict[str, Any]]:
     inst = create_command(name="ping", description="Ping", registry=reg.commands)
 
     @inst
-    async def ping(ctx: CommandContext) -> None:
+    async def ping(ctx: CommandInteraction) -> None:
         registrou["comando"] = ctx
 
     return reg, registrou
@@ -865,7 +867,7 @@ class TestQuatroRamos:
         assert inst is not None
 
         @inst.autocomplete()
-        async def sugere(ctx: Any) -> list[dict[str, Any]]:
+        async def sugere(ctx: AutocompleteInteraction) -> list[dict[str, Any]]:
             registrou["autocomplete"] = ctx
             #: `(nome, valor)`, dict e `Choice` são as três formas —
             #: uma string crua não é escolha, é um item inválido, e o
@@ -1008,11 +1010,11 @@ class TestOrdemDoDispatch:
         inst = create_command(name="ping", description="Ping", registry=reg.commands)
 
         @inst
-        async def ping(ctx: CommandContext) -> None:
+        async def ping(ctx: CommandInteraction) -> None:
             ordem.append("comando")
 
         @event("interaction_create", registry=reg.events)
-        async def visto(ctx: EventContext, inter: Interaction) -> None:
+        async def visto(inter: Interaction) -> None:
             ordem.append("evento")
 
         await cliente.dispatch(
@@ -1024,21 +1026,29 @@ class TestOrdemDoDispatch:
 
     async def test_state_do_comando_e_visivel_no_event(self) -> None:
         """O dicionário é **um só por dispatch**: é o que faz a etapa 4
-        e os handlers de `@event("interaction_create")` carregarem o
-        mesmo estado sem serem o mesmo objeto."""
-        reg = Registry()
-        cliente = Client(Config(intents=Intents.default()), registry=reg)
+        e a middleware de evento da etapa 5 carregarem o mesmo estado
+        sem serem o mesmo objeto. O handler de `@event` recebe só o
+        payload (`0031`) — quem no lado do evento lê o estado é a
+        middleware, que enxerga o quadro interno."""
         lido: list[Any] = []
+
+        async def ve(frame: Any, block: Any) -> None:
+            lido.append(frame.state.get("visto"))
+
+        reg = Registry()
+        cliente = Client(
+            Config(intents=Intents.default(), events=EventOptions(middleware=ve)),
+            registry=reg,
+        )
 
         inst = create_command(name="ping", description="Ping", registry=reg.commands)
 
         @inst
-        async def ping(ctx: CommandContext) -> None:
+        async def ping(ctx: CommandInteraction) -> None:
             ctx.state["visto"] = "pelo-comando"
 
         @event("interaction_create", registry=reg.events)
-        async def visto(ctx: EventContext, inter: Interaction) -> None:
-            lido.append(ctx.state.get("visto"))
+        async def visto(inter: Interaction) -> None: ...
 
         await cliente.dispatch(
             "INTERACTION_CREATE",
@@ -1055,7 +1065,7 @@ class TestOrdemDoDispatch:
         recebido: list[Any] = []
 
         @event("message_create", registry=reg.events)
-        async def criado(ctx: EventContext, msg: Any) -> None:
+        async def criado(msg: Any) -> None:
             recebido.append(msg)
 
         await cliente.dispatch(

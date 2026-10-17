@@ -1,8 +1,8 @@
-"""`ResponderContext` + a superfície nova da interação (0023).
+"""`ComponentInteraction` — a superfície da interação tipada (0023, revisto no 0031).
 
-O fio da R6: o contexto é o objeto entregue ao handler — resposta
-delega ao dono do estado, predicados delegam ao modelo, e `values`/
-`fields` são o que a ideia 07 §4 prometeu.
+O fio da R6: a interação tipada é o objeto entregue ao handler —
+resposta delega ao dono do estado, predicados delegam ao modelo, e
+`values`/`fields` são o que a ideia 07 §4 prometeu.
 """
 
 from __future__ import annotations
@@ -11,9 +11,9 @@ import pytest
 
 from kryncord.enums import ComponentType, InteractionType, ResponderType
 from kryncord.interactions.component import ModalFields
+from kryncord.interactions.components import ComponentInteraction
 from kryncord.interactions.response import InteractionContext
 from kryncord.models.interaction import Interaction
-from kryncord.responders.context import ResponderContext
 
 
 class ApiFalsa:
@@ -81,10 +81,10 @@ def _botao(custom_id: str = "/x", mensagem: dict | None = None) -> Interaction:
 
 def _ctx(
     interaction: Interaction, *, params: dict | None = None
-) -> tuple[ResponderContext, ApiFalsa]:
+) -> tuple[ComponentInteraction, ApiFalsa]:
     api = ApiFalsa()
-    ctx = ResponderContext(InteractionContext(interaction, api), params=params)
-    return ctx, api
+    inter = ComponentInteraction(InteractionContext(interaction, api), params=params)
+    return inter, api
 
 
 # --------------------------------------------------------------------------
@@ -149,12 +149,12 @@ class TestPredicados:
         assert com_member.in_guild() is True
         assert sem_member.in_guild() is False
 
-    def test_responder_context_proxya_os_predicados(self) -> None:
-        ctx, _ = _ctx(_botao())
+    def test_interacao_tipada_proxya_os_predicados(self) -> None:
+        inter, _ = _ctx(_botao())
 
-        assert ctx.is_button() is True
-        assert ctx.is_string_select() is False
-        assert ctx.is_modal_submit() is False
+        assert inter.is_button() is True
+        assert inter.is_string_select() is False
+        assert inter.is_modal_submit() is False
 
 
 # --------------------------------------------------------------------------
@@ -167,14 +167,14 @@ class TestDados:
         interacao = _interacao(
             3, data={"custom_id": "/fruits", "component_type": 3, "values": ["apple", "melon"]}
         )
-        ctx, _ = _ctx(interacao)
+        inter, _ = _ctx(interacao)
 
-        assert ctx.values == ("apple", "melon")
+        assert inter.values == ("apple", "melon")
 
     def test_values_vazio_fora_de_select(self) -> None:
-        ctx, _ = _ctx(_botao())
+        inter, _ = _ctx(_botao())
 
-        assert ctx.values == ()
+        assert inter.values == ()
 
     def test_fields_do_modal_v1(self) -> None:
         interacao = _interacao(
@@ -187,12 +187,12 @@ class TestDados:
                 ],
             },
         )
-        ctx, _ = _ctx(interacao)
+        inter, _ = _ctx(interacao)
 
-        assert ctx.fields.get_text_input("name") == "Ana"
-        assert ctx.fields["age"] == "20"
-        assert ctx.fields.keys == ("name", "age")
-        assert "name" in ctx.fields
+        assert inter.fields.get_text_input("name") == "Ana"
+        assert inter.fields["age"] == "20"
+        assert inter.fields.keys == ("name", "age")
+        assert "name" in inter.fields
 
     def test_fields_do_modal_v2_com_label(self) -> None:
         """v2 envolve o componente num `Label` — a mesma leitura tem
@@ -210,30 +210,30 @@ class TestDados:
                 ],
             },
         )
-        ctx, _ = _ctx(interacao)
+        inter, _ = _ctx(interacao)
 
-        assert ctx.fields.get_text_input("nome") == "Bia"
+        assert inter.fields.get_text_input("nome") == "Bia"
 
     def test_fields_ausente_devolve_default(self) -> None:
-        ctx, _ = _ctx(_interacao(5, data={"custom_id": "/form", "components": []}))
+        inter, _ = _ctx(_interacao(5, data={"custom_id": "/form", "components": []}))
 
-        assert ctx.fields.get_text_input("nome") is None
-        assert ctx.fields.get_text_input("nome", "padrão") == "padrão"
+        assert inter.fields.get_text_input("nome") is None
+        assert inter.fields.get_text_input("nome", "padrão") == "padrão"
 
     def test_params_cru_e_por_atributo(self) -> None:
-        ctx, _ = _ctx(_botao("/manage/user/123/ban"), params={"user_id": "123", "action": "ban"})
+        inter, _ = _ctx(_botao("/manage/user/123/ban"), params={"user_id": "123", "action": "ban"})
 
-        assert ctx.params["user_id"] == "123"
-        assert ctx.params.user_id == "123"
-        assert ctx.custom_id == "/manage/user/123/ban"
+        assert inter.params["user_id"] == "123"
+        assert inter.params.user_id == "123"
+        assert inter.custom_id == "/manage/user/123/ban"
 
     def test_params_ausente_e_attribute_error(self) -> None:
         """`AttributeError`, não `KeyError`: quem escreveu o typo errou
         um **nome**."""
-        ctx, _ = _ctx(_botao(), params={})
+        inter, _ = _ctx(_botao(), params={})
 
         with pytest.raises(AttributeError, match="user_ld"):
-            _ = ctx.params.user_ld
+            _ = inter.params.user_ld
 
     def test_message_do_componente(self) -> None:
         interacao = _botao(
@@ -243,104 +243,104 @@ class TestDados:
                 "author": {"id": "9", "username": "ana", "discriminator": "0001"},
             }
         )
-        ctx, _ = _ctx(interacao)
+        inter, _ = _ctx(interacao)
 
-        assert ctx.message is not None
-        assert ctx.message.id == 555
+        assert inter.message is not None
+        assert inter.message.id == 555
 
     def test_message_none_em_modal_de_comando(self) -> None:
-        ctx, _ = _ctx(_interacao(5, data={"custom_id": "/form"}))
+        inter, _ = _ctx(_interacao(5, data={"custom_id": "/form"}))
 
-        assert ctx.message is None
+        assert inter.message is None
 
 
 # --------------------------------------------------------------------------
-# Resposta pelo contexto — delegação ao dono do estado
+# Resposta pela interação tipada — delegação ao dono do estado
 # --------------------------------------------------------------------------
 
 
 class TestRespostaDelegada:
     async def test_update_aceita_vazio(self) -> None:
-        """Diferente de `reply()`: "mantém como está" é o ack de botão
+        """Diferente de `respond()`: "mantém como está" é o ack de botão
         mais comum que existe."""
-        ctx, api = _ctx(_botao())
+        inter, api = _ctx(_botao())
 
-        await ctx.update()
+        await inter.update()
 
         assert api.chamadas == [("update_message", None)]
 
     async def test_update_com_conteudo(self) -> None:
-        ctx, api = _ctx(_botao())
+        inter, api = _ctx(_botao())
 
-        await ctx.update("Confirmado")
+        await inter.update("Confirmado")
 
         assert api.chamadas == [("update_message", "Confirmado")]
 
     async def test_update_em_comando_e_erro(self) -> None:
-        from kryncord.errors import InteractionStateError
+        from kryncord.errors import InvalidInteractionState
 
-        ctx, _ = _ctx(_interacao(2, data={"name": "ping", "type": 1}))
+        inter, _ = _ctx(_interacao(2, data={"name": "ping", "type": 1}))
 
-        with pytest.raises(InteractionStateError, match="só existe em interação de componente"):
-            await ctx.update()
+        with pytest.raises(InvalidInteractionState, match="só existe em interação de componente"):
+            await inter.update()
 
     async def test_defer_update_em_componente(self) -> None:
-        ctx, api = _ctx(_botao())
+        inter, api = _ctx(_botao())
 
-        await ctx.defer_update()
+        await inter.defer_update()
 
         assert api.chamadas == [("defer_update",)]
 
     async def test_defer_update_em_comando_e_erro(self) -> None:
-        from kryncord.errors import InteractionStateError
+        from kryncord.errors import InvalidInteractionState
 
-        ctx, _ = _ctx(_interacao(2, data={"name": "ping", "type": 1}))
+        inter, _ = _ctx(_interacao(2, data={"name": "ping", "type": 1}))
 
-        with pytest.raises(InteractionStateError, match="só existe em interação de componente"):
-            await ctx.defer_update()
+        with pytest.raises(InvalidInteractionState, match="só existe em interação de componente"):
+            await inter.defer_update()
 
     async def test_defer_ephemeral_em_componente_e_erro(self) -> None:
         """O bug que o levantamento do 0023 achou: a flag era descartada
         em silêncio. Agora é erro com a saída na mensagem."""
-        ctx, _ = _ctx(_botao())
+        inter, _ = _ctx(_botao())
 
         with pytest.raises(ValueError, match="DEFERRED_UPDATE_MESSAGE"):
-            await ctx.defer(ephemeral=True)
+            await inter.defer(ephemeral=True)
 
     async def test_defer_ephemeral_em_comando_passa(self) -> None:
-        ctx, api = _ctx(_interacao(2, data={"name": "ping", "type": 1}))
+        inter, api = _ctx(_interacao(2, data={"name": "ping", "type": 1}))
 
-        await ctx.defer(ephemeral=True)
+        await inter.defer(ephemeral=True)
 
         assert api.chamadas == [("defer", True)]
 
-    async def test_fetch_reply_alcancando_followup(self) -> None:
-        ctx, api = _ctx(_botao())
+    async def test_fetch_original_response_alcancando_followup(self) -> None:
+        inter, api = _ctx(_botao())
 
-        resultado = await ctx.fetch_reply(message_id=777)
+        resultado = await inter.fetch_original_response(message_id=777)
 
         assert resultado == "msg:777"
         assert api.chamadas == [("fetch_message", 777)]
 
     async def test_delete_com_message_id(self) -> None:
-        ctx, api = _ctx(_botao())
-        await ctx.reply("oi")
+        inter, api = _ctx(_botao())
+        await inter.respond("oi")
 
-        await ctx.delete(message_id=777)
+        await inter.delete_original_response(message_id=777)
 
         assert api.chamadas[-1] == ("delete_message", 777)
 
     async def test_launch_activity(self) -> None:
-        ctx, api = _ctx(_botao())
+        inter, api = _ctx(_botao())
 
-        await ctx.launch_activity()
+        await inter.launch_activity()
 
         assert api.chamadas == [("launch_activity",)]
 
-    async def test_reply_ephemeral_kwarg(self) -> None:
-        ctx, api = _ctx(_botao())
+    async def test_respond_ephemeral_kwarg(self) -> None:
+        inter, api = _ctx(_botao())
 
-        await ctx.reply("só pra você", ephemeral=True)
+        await inter.respond("só pra você", ephemeral=True)
 
         assert api.chamadas == [("respond", "só pra você", {"ephemeral": True})]
 
@@ -354,11 +354,11 @@ class TestSpawn:
     async def test_spawn_sem_registry_e_erro_claro(self) -> None:
         """Task órfã sobrevive ao client — o oposto do que background
         promete (0012, parecer do 07)."""
-        ctx, _ = _ctx(_botao())
+        inter, _ = _ctx(_botao())
         coro = _dorme()
 
         with pytest.raises(RuntimeError, match="TaskRegistry"):
-            ctx.spawn(coro)
+            inter.spawn(coro)
 
         #: A coroutine foi criada e não consumida — fechar evita o
         #: warning de "never awaited", que não é o que se testa aqui.
@@ -370,9 +370,9 @@ class TestSpawn:
         api = ApiFalsa()
         ic = InteractionContext(_botao(), api)
         tasks = TaskRegistry()
-        ctx = ResponderContext(ic, tasks=tasks)
+        inter = ComponentInteraction(ic, tasks=tasks)
 
-        task = ctx.spawn(_dorme())
+        task = inter.spawn(_dorme())
 
         await task
         assert tasks.vivas == 0
@@ -384,10 +384,10 @@ async def _dorme() -> None:
 
 class TestAwaitResponder:
     async def test_sem_esperas_e_erro_claro(self) -> None:
-        ctx, _ = _ctx(_botao())
+        inter, _ = _ctx(_botao())
 
         with pytest.raises(RuntimeError, match="Esperas"):
-            await ctx.await_responder("/x")
+            await inter.await_responder("/x")
 
     async def test_timeout_levanta_interaction_timeout_error(self) -> None:
         """ "O usuário não submeteu" é uma resposta — o handler precisa
@@ -397,12 +397,12 @@ class TestAwaitResponder:
         from kryncord.errors import InteractionTimeoutError
         from kryncord.responders.dispatch import Esperas
 
-        ctx, _ = _ctx(_botao())
+        inter, _ = _ctx(_botao())
         esperas = Esperas()
-        ctx._esperas = esperas
+        inter._esperas = esperas
 
         with pytest.raises(InteractionTimeoutError, match="fechou o modal"):
-            await asyncio.wait_for(ctx.await_responder("/x", timeout=0.05), 2)
+            await asyncio.wait_for(inter.await_responder("/x", timeout=0.05), 2)
 
 
 # --------------------------------------------------------------------------

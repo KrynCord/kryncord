@@ -270,10 +270,10 @@ class TestLoadLogs:
     async def test_total_final_conta_o_que_registrou(
         self, cliente: Client, captura: list[str]
     ) -> None:
-        from kryncord import CommandContext, command
+        from kryncord import CommandInteraction, command
 
         @command(name="ping", description="Ping", registry=cliente.commands)
-        async def ping(ctx: CommandContext) -> None:  # pragma: no cover - só registra
+        async def ping(inter: CommandInteraction) -> None:  # pragma: no cover - só registra
             raise AssertionError("não devia rodar")
 
         cliente.responders.register(
@@ -290,14 +290,14 @@ class TestLoadLogs:
     async def test_singular_e_plural_no_log(self, cliente: Client, captura: list[str]) -> None:
         """`plural` do Python faria "1 comandos". Um log que erra o
         próprio texto ensina a desconfiar do resto."""
-        from kryncord import CommandContext, command
+        from kryncord import CommandInteraction, command
 
         @command(name="ping", description="Ping", registry=cliente.commands)
-        async def ping(ctx: CommandContext) -> None:  # pragma: no cover - só registra
+        async def ping(inter: CommandInteraction) -> None:  # pragma: no cover - só registra
             raise AssertionError("não devia rodar")
 
         @command(name="pong", description="Pong", registry=cliente.commands)
-        async def pong(ctx: CommandContext) -> None:  # pragma: no cover - só registra
+        async def pong(inter: CommandInteraction) -> None:  # pragma: no cover - só registra
             raise AssertionError("não devia rodar")
 
         await bootstrap(load_logs=False, client=cliente)

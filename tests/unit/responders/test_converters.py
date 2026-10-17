@@ -279,7 +279,7 @@ class TestPlanoDe:
     async def test_param_da_rota_entra_no_plano(self) -> None:
         async def h(ctx, user_id: int): ...
 
-        ((nome, conversor, opcional, tem_default),) = plano_de(h, "/a/:user_id")
+        ((nome, conversor, opcional, tem_default),) = plano_de(h, "/a/{user_id}")
 
         assert nome == "user_id"
         assert conversor is resolve_conversor(int)[0]
@@ -290,38 +290,38 @@ class TestPlanoDe:
         async def h(ctx, user_ld: int): ...
 
         with pytest.raises(ResponderDefinitionError, match="user_ld"):
-            plano_de(h, "/a/:user_id")
+            plano_de(h, "/a/{user_id}")
 
     async def test_param_fora_com_default_passa(self) -> None:
         """Default existe para param opcional de código, não de rota."""
 
         async def h(ctx, user_id: int, pagina: int = 1): ...
 
-        plano = plano_de(h, "/a/:user_id")
+        plano = plano_de(h, "/a/{user_id}")
 
         assert [item[0] for item in plano] == ["user_id", "pagina"]
 
     async def test_opcional_da_rota_mais_anotacao_required(self) -> None:
-        """A união dos dois sinais: `?:` na rota OU `| None` na
+        """A união dos dois sinais: `{?x}` na rota OU `| None` na
         anotação — os exemplos da 0013 usam cada forma de um jeito."""
 
         async def h(ctx, number: int): ...
 
-        ((_, _, opcional, _),) = plano_de(h, "/page/?:number")
+        ((_, _, opcional, _),) = plano_de(h, "/page/{?number}")
 
         assert opcional is True
 
     async def test_anotacao_none_marca_opcional(self) -> None:
         async def h(ctx, date: datetime | None): ...
 
-        ((_, _, opcional, _),) = plano_de(h, "/remember/:date")
+        ((_, _, opcional, _),) = plano_de(h, "/remember/{date}")
 
         assert opcional is True
 
     async def test_dict_form_e_detectada(self) -> None:
         async def h(ctx, params): ...
 
-        assert recebe_params_dict(h, "/a/:x") is True
+        assert recebe_params_dict(h, "/a/{x}") is True
 
     async def test_param_da_rota_chamado_params_nao_e_dict(self) -> None:
         """Se a rota tem um param com esse nome, ele é param — o valor
@@ -329,7 +329,7 @@ class TestPlanoDe:
 
         async def h(ctx, params): ...
 
-        assert recebe_params_dict(h, "/a/:params") is False
+        assert recebe_params_dict(h, "/a/{params}") is False
 
     async def test_handler_sem_ctx_e_erro(self) -> None:
         async def h(): ...

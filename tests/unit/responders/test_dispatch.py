@@ -3,6 +3,10 @@
 O fio: `block()` para tudo **inclusive** o `on_not_found` — a 0017
 sobrescreveu a ideia 11 nisso, e o teste é a prova viva da decisão.
 
+O handler recebe a **interação tipada** (`0031`): com `types=[BUTTON]`,
+a anotação é `ButtonInteraction` — anotação que não bate derruba o
+registro na importação, não o clique.
+
 Nenhum teste toca na rede: o `InteractionsAPI` é um dublê.
 """
 
@@ -12,9 +16,9 @@ import pytest
 
 from kryncord.enums import ResponderType
 from kryncord.errors import DispatchError
+from kryncord.interactions.components import ButtonInteraction, ComponentInteraction
 from kryncord.interactions.response import InteractionContext
 from kryncord.models.interaction import Interaction
-from kryncord.responders.context import ResponderContext
 from kryncord.responders.decorators import responder
 from kryncord.responders.dispatch import (
     MAX_PROFUNDIDADE,
@@ -83,13 +87,13 @@ class TestDispatch:
         reg = ResponderRegistry()
         recebido: dict = {}
 
-        async def h(ctx, user_id: int, action: str):
+        async def h(inter: ButtonInteraction, user_id: int, action: str):
             recebido["user_id"] = user_id
             recebido["action"] = action
-            recebido["custom_id"] = ctx.custom_id
-            recebido["is_button"] = ctx.is_button()
+            recebido["custom_id"] = inter.custom_id
+            recebido["is_button"] = inter.is_button()
 
-        responder("/manage/user/:user_id/:action", types=B, registry=reg)(h)
+        responder("/manage/user/{user_id}/{action}", types=B, registry=reg)(h)
 
         ok = await dispatch_responder(_botao("/manage/user/123/ban"), ApiFalsa(), registry=reg)
 
@@ -103,9 +107,9 @@ class TestDispatch:
         reg = ResponderRegistry()
         chamados: list = []
 
-        async def not_found(ctx):
-            chamados.append(ctx.custom_id)
-            await ctx.reply("Isso não foi configurado ainda.", ephemeral=True)
+        async def not_found(inter: ComponentInteraction):
+            chamados.append(inter.custom_id)
+            await inter.respond("Isso não foi configurado ainda.", ephemeral=True)
 
         ok = await dispatch_responder(
             _botao("/ninguem"),
@@ -130,9 +134,9 @@ class TestDispatch:
         reg = ResponderRegistry()
         chamados: list = []
 
-        async def h(ctx): ...
+        async def h(inter: ButtonInteraction): ...
 
-        async def not_found(ctx):
+        async def not_found(inter: ComponentInteraction):
             chamados.append(1)
 
         responder("/a", types=B, registry=reg)(h)
@@ -159,7 +163,7 @@ class TestCachePolitica:
         reg = ResponderRegistry()
         rodou: list = []
 
-        async def h(ctx):
+        async def h(inter: ButtonInteraction):
             rodou.append(1)
 
         responder("/a", types=B, cache="cached", registry=reg)(h)
@@ -174,7 +178,7 @@ class TestCachePolitica:
         reg = ResponderRegistry()
         rodou: list = []
 
-        async def h(ctx):
+        async def h(inter: ButtonInteraction):
             rodou.append(1)
 
         responder("/a", types=B, cache="cached", registry=reg)(h)
@@ -190,7 +194,7 @@ class TestCachePolitica:
         reg = ResponderRegistry()
         rodou: list = []
 
-        async def h(ctx):
+        async def h(inter: ButtonInteraction):
             rodou.append(1)
 
         responder("/a", types=B, cache="fresh", registry=reg)(h)
@@ -214,14 +218,14 @@ class TestMiddleware:
         reg = ResponderRegistry()
         rodou: list = []
 
-        async def proibe(ctx, block_fn):
+        async def proibe(inter: ComponentInteraction, block_fn):
             rodou.append("middleware")
             block_fn()
 
-        async def h(ctx):
+        async def h(inter: ButtonInteraction):
             rodou.append("handler")
 
-        async def not_found(ctx):
+        async def not_found(inter: ComponentInteraction):
             rodou.append("on_not_found")
 
         responder("/a", types=B, registry=reg)(h)
@@ -237,13 +241,13 @@ class TestMiddleware:
         reg = ResponderRegistry()
         rodou: list = []
 
-        async def m1(ctx, block_fn):
+        async def m1(inter: ComponentInteraction, block_fn):
             rodou.append("m1")
 
-        async def m2(ctx, block_fn):
+        async def m2(inter: ComponentInteraction, block_fn):
             rodou.append("m2")
 
-        async def h(ctx):
+        async def h(inter: ButtonInteraction):
             rodou.append("handler")
 
         responder("/a", types=B, registry=reg)(h)
@@ -256,10 +260,10 @@ class TestMiddleware:
         reg = ResponderRegistry()
         erros: list = []
 
-        async def h(ctx):
+        async def h(inter: ButtonInteraction):
             raise RuntimeError("boom")
 
-        async def on_error(ctx, exc):
+        async def on_error(inter: ComponentInteraction, exc):
             erros.append(exc)
 
         responder("/a", types=B, registry=reg)(h)
@@ -275,7 +279,7 @@ class TestMiddleware:
         reg = ResponderRegistry()
         api = ApiFalsa()
 
-        async def h(ctx):
+        async def h(inter: ButtonInteraction):
             raise RuntimeError("boom")
 
         responder("/a", types=B, registry=reg)(h)
@@ -286,9 +290,9 @@ class TestMiddleware:
         assert api.chamadas == ["respond"]
 
 
-def _contexto(interaction: Interaction) -> ResponderContext:
+def _componente(interaction: Interaction) -> ComponentInteraction:
     api = ApiFalsa()
-    return ResponderContext(InteractionContext(interaction, api))
+    return ComponentInteraction(InteractionContext(interaction, api))
 
 
 class TestEmitResponder:
@@ -296,13 +300,13 @@ class TestEmitResponder:
         reg = ResponderRegistry()
         rodou: list = []
 
-        async def h(ctx, user_id: int):
+        async def h(inter: ButtonInteraction, user_id: int):
             rodou.append(user_id)
 
-        responder("/manage/user/:user_id/:action", types=B, registry=reg)(h)
-        ctx = _contexto(_botao("/manage/user/123/ban"))
+        responder("/manage/user/{user_id}/{action}", types=B, registry=reg)(h)
+        inter = _componente(_botao("/manage/user/123/ban"))
 
-        ok = await emit_responder("/manage/user/456/kick", ctx, registry=reg)
+        ok = await emit_responder("/manage/user/456/kick", inter, registry=reg)
 
         assert ok is True
         assert rodou == [456]
@@ -314,12 +318,12 @@ class TestEmitResponder:
         reg = ResponderRegistry()
         chamados: list = []
 
-        async def not_found(ctx):
+        async def not_found(inter: ComponentInteraction):
             chamados.append(1)
 
-        ctx = _contexto(_botao("/ninguem"))
+        inter = _componente(_botao("/ninguem"))
 
-        ok = await emit_responder("/ninguem", ctx, registry=reg)
+        ok = await emit_responder("/ninguem", inter, registry=reg)
 
         assert ok is False
         assert chamados == []
@@ -327,28 +331,28 @@ class TestEmitResponder:
     async def test_re_emitir_e_erro(self) -> None:
         reg = ResponderRegistry()
 
-        async def h(ctx): ...
+        async def h(inter: ButtonInteraction): ...
 
         responder("/a", types=B, registry=reg)(h)
-        ctx = _contexto(_botao("/a"))
+        inter = _componente(_botao("/a"))
 
-        await emit_responder("/a", ctx, registry=reg)
+        await emit_responder("/a", inter, registry=reg)
 
         with pytest.raises(DispatchError, match="já emitido"):
-            await emit_responder("/a", ctx, registry=reg)
+            await emit_responder("/a", inter, registry=reg)
 
     async def test_force_re_emite(self) -> None:
         reg = ResponderRegistry()
         rodou: list = []
 
-        async def h(ctx):
+        async def h(inter: ButtonInteraction):
             rodou.append(1)
 
         responder("/a", types=B, registry=reg)(h)
-        ctx = _contexto(_botao("/a"))
+        inter = _componente(_botao("/a"))
 
-        await emit_responder("/a", ctx, registry=reg)
-        ok = await emit_responder("/a", ctx, registry=reg, force=True)
+        await emit_responder("/a", inter, registry=reg)
+        ok = await emit_responder("/a", inter, registry=reg, force=True)
 
         assert ok is True
         assert rodou == [1, 1]
@@ -358,26 +362,26 @@ class TestEmitResponder:
         guard existe porque `force=True` não abre a profundidade."""
         reg = ResponderRegistry()
 
-        async def looper(ctx):
-            await emit_responder("/loop", ctx, registry=reg, force=True)
+        async def looper(inter: ButtonInteraction):
+            await emit_responder("/loop", inter, registry=reg, force=True)
 
         responder("/loop", types=B, registry=reg)(looper)
-        ctx = _contexto(_botao("/loop"))
+        inter = _componente(_botao("/loop"))
 
         with pytest.raises(DispatchError, match="aninhado"):
-            await emit_responder("/loop", ctx, registry=reg, force=True)
+            await emit_responder("/loop", inter, registry=reg, force=True)
 
     async def test_params_passados_pulam_o_parse(self) -> None:
         reg = ResponderRegistry()
         recebido: dict = {}
 
-        async def h(ctx, user_id: int):
+        async def h(inter: ButtonInteraction, user_id: int):
             recebido["user_id"] = user_id
 
-        responder("/x/:user_id", types=B, registry=reg)(h)
-        ctx = _contexto(_botao("/x/qualquer-coisa"))
+        responder("/x/{user_id}", types=B, registry=reg)(h)
+        inter = _componente(_botao("/x/qualquer-coisa"))
 
-        await emit_responder("/x/qualquer-coisa", ctx, registry=reg, params={"user_id": "777"})
+        await emit_responder("/x/qualquer-coisa", inter, registry=reg, params={"user_id": "777"})
 
         assert recebido["user_id"] == 777
 
@@ -390,7 +394,7 @@ class TestEsperas:
         reg = ResponderRegistry()
         esperas = Esperas()
 
-        async def h(ctx):
+        async def h(inter: ButtonInteraction):
             return {"nome": "ana"}
 
         responder("/register/form", types=B, registry=reg)(h)

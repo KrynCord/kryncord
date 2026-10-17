@@ -10,9 +10,9 @@ Nada é registrado na importação: este módulo só **define**.
 
 from __future__ import annotations
 
-from typing import Any
+from kryncord.interactions import CommandInteraction
 
 
-async def orfao(ctx: Any) -> None:
+async def orfao(inter: CommandInteraction) -> None:
     """Nunca roda — só existe para ser registrado por quem importa."""
     raise AssertionError("o handler do fixture não deve ser chamado")

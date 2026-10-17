@@ -11,6 +11,7 @@ import pytest
 
 from kryncord.enums import ResponderType
 from kryncord.errors import ResponderDefinitionError
+from kryncord.interactions.components import ButtonInteraction, ModalSubmitInteraction
 from kryncord.responders.decorators import responder
 from kryncord.responders.registry import ResponderRegistry
 
@@ -19,10 +20,13 @@ S = [ResponderType.STRING_SELECT]
 M = [ResponderType.MODAL_SUBMIT]
 
 
-async def h(ctx): ...
+async def h(ctx: ButtonInteraction): ...
 
 
-async def h2(ctx): ...
+async def h2(ctx: ButtonInteraction): ...
+
+
+async def h_modal(ctx: ModalSubmitInteraction): ...
 
 
 class TestRegistro:
@@ -67,11 +71,11 @@ class TestConflitos:
         modal e em botão são dois lugares da interface."""
         reg = ResponderRegistry()
         responder("/register/form", types=B, registry=reg)(h)
-        responder("/register/form", types=M, registry=reg)(h2)
+        responder("/register/form", types=M, registry=reg)(h_modal)
 
         assert len(reg) == 2
         assert reg.match("/register/form", ResponderType.BUTTON).entrada.handler is h
-        assert reg.match("/register/form", ResponderType.MODAL_SUBMIT).entrada.handler is h2
+        assert reg.match("/register/form", ResponderType.MODAL_SUBMIT).entrada.handler is h_modal
 
     def test_mesmo_padrao_tipos_sobrepostos_e_erro(self) -> None:
         reg = ResponderRegistry()
@@ -85,19 +89,19 @@ class TestConflitos:
             )(h2)
 
     def test_pesos_iguais_casando_o_mesmo_id_e_erro(self) -> None:
-        """/a/:x e /a/:y têm o mesmo peso e casam /a/1 — ninguém decide
+        """/a/{x} e /a/{y} têm o mesmo peso e casam /a/1 — ninguém decide
         qual atende, e o empate exato é erro na importação."""
         reg = ResponderRegistry()
-        responder("/a/:x", types=B, registry=reg)(h)
+        responder("/a/{x}", types=B, registry=reg)(h)
 
         with pytest.raises(ResponderDefinitionError, match="conflita"):
-            responder("/a/:y", types=B, registry=reg)(h2)
+            responder("/a/{y}", types=B, registry=reg)(h2)
 
     def test_pesos_iguais_literais_diferentes_passam(self) -> None:
-        """/a/:x e /b/:y nunca casam o mesmo id — são duas rotas."""
+        """/a/{x} e /b/{y} nunca casam o mesmo id — são duas rotas."""
         reg = ResponderRegistry()
-        responder("/a/:x", types=B, registry=reg)(h)
-        responder("/b/:y", types=B, registry=reg)(h2)
+        responder("/a/{x}", types=B, registry=reg)(h)
+        responder("/b/{y}", types=B, registry=reg)(h2)
 
         assert len(reg) == 2
 
@@ -105,7 +109,7 @@ class TestConflitos:
         """Sem citar os dois, o usuário persegue o lugar errado."""
         reg = ResponderRegistry()
 
-        async def primeiro(ctx): ...
+        async def primeiro(ctx: ButtonInteraction): ...
 
         responder("/x", types=B, registry=reg)(primeiro)
 
@@ -117,7 +121,7 @@ class TestMatchPrioridade:
     def test_mais_especifico_casa_primeiro(self) -> None:
         reg = ResponderRegistry()
         responder("/manage/**", types=B, registry=reg)(h)
-        responder("/manage/user/:id/ban", types=B, registry=reg)(h2)
+        responder("/manage/user/{id}/ban", types=B, registry=reg)(h2)
 
         achado = reg.match("/manage/user/9/ban", ResponderType.BUTTON)
 
