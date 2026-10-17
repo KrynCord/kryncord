@@ -175,7 +175,7 @@ for a webhook with no author.
 import asyncio
 import os
 
-from kryncord import Client, CommandContext, Config, Intents, command
+from kryncord import Client, CommandInteraction, Config, Intents, command
 from kryncord.commands import CommandSync
 
 
@@ -185,8 +185,8 @@ async def main() -> None:
     async with Client(config) as client:
 
         @command(name="ping", description="Responde pong", registry=client.commands)
-        async def ping(ctx: CommandContext) -> None:
-            await ctx.reply("pong")
+        async def ping(interaction: CommandInteraction) -> None:
+            await interaction.respond("pong")
 
         # registers the definition with Discord and reports the diff
         report = await CommandSync(client.commands, client.api.applications).sync()
@@ -199,9 +199,11 @@ async def main() -> None:
 asyncio.run(main())
 ```
 
-Handlers must be `async` and take exactly one argument — the
-`CommandContext`. A synchronous or zero-argument handler raises
-`TypeError` at definition time rather than failing on every click.
+Handlers must be `async` and take exactly one argument — the typed
+interaction the decorator delivers (`CommandInteraction` for slash
+commands, `ButtonInteraction` for `@button`, …). The annotation is
+required and checked at definition time (`HandlerSignatureError`)
+rather than failing on every click.
 
 ### Reading from the cache
 
@@ -248,8 +250,8 @@ yet.
 |---|---|
 | [`docs/README.md`](docs/README.md) | Index and reading order |
 | [`docs/internals/architecture.md`](docs/internals/architecture.md) | Full architecture: layers, modules, boundaries |
-| [`docs/decisions/`](docs/decisions/) | 30 ADRs — why each decision was made |
-| [`docs/api/`](docs/api/) | Component specs (V1, V2 and modals) |
+| [`docs/decisions/`](docs/decisions/) | 31 ADRs — why each decision was made |
+| [`docs/api/`](docs/api/) | Surface specs: components (V1, V2, modals) and typed interactions |
 | [`docs/guides/publication.md`](docs/guides/publication.md) | Release process: TestPyPI, PyPI, versioning |
 | [`CHANGELOG.md`](CHANGELOG.md) | What changed in each release |
 | [`examples/`](examples/) | Runnable example |
@@ -269,6 +271,7 @@ src/kryncord/
   models/       User, Message, Guild, Interaction, ...
   events/       payload decoding and dispatch policy
   commands/     definitions, options, registry, sync
+  interactions/ typed interactions and response state machine
   responders/   custom_id routing and converters
   components/   buttons, selects, modals, embeds
   cache/        policy, memory cache, statistics

@@ -36,6 +36,7 @@ alternativas consideradas.
 | [0028](0028-command-scope-deferred.md) | Escopo do `@command` quando o decorator não declara; `deferido` + `reescopiar` no `start()` | aceita |
 | [0029](0029-on-not-found-arity.md) | `on_not_found(ctx)` — um argumento só, nos dois ramos | aceita |
 | [0030](0030-per-command-error-handlers.md) | `on_error` por comando passa a ser lido; `on_not_found` sai da superfície do decorator | aceita |
+| [0031](0031-typed-interactions.md) | Interações tipadas: fim do `ctx` genérico; `{param}` na rota (sobrepõe 0012, 0013, 0016, 0020) | aceita |
 
 As 12 decisões de API pendentes (K1–K12) foram fechadas no `0009` —
 eram o que a Fase 4 precisava saber antes de codar. As vinte e uma
@@ -59,3 +60,10 @@ Cada uma passou pelo conselho de 22 perfis; o veredito e a divergência
 preservada estão no rodapé de cada registro. A ordem de implementação
 dos itens 8–18 de `ideias/12` §5 continua aberta — depende de o
 registry estar maduro antes da modularização.
+
+A `0031` é a primeira a quebrar deliberadamente API pública já
+publicada: os quatro contextos genéricos saem da superfície e as
+interações tipadas entram. Diferente das anteriores, ela não nasceu de
+uma contradição encontrada ao codar, e sim de especificação externa —
+os dois documentos de superfície de interação, reconstituídos em
+[`../api/`](../api/).
