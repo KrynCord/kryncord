@@ -5,6 +5,70 @@ numeração em [SemVer](https://semver.org/lang/pt-BR/).
 
 ## [Unreleased]
 
+## [0.2.0b1] — 2026-10-17
+
+A migração **breaking** da superfície de interações (ADR 0031): os
+contextos genéricos saem, as interações tipadas entram. Cada troca
+está listada abaixo — é uma passada de grep no código do bot, não uma
+migração em duas etapas.
+
+### Adicionado
+
+- **API de interações tipadas (ADR 0031)** — as classes que o handler
+  recebe: `CommandInteraction` (`UserCommandInteraction`,
+  `MessageCommandInteraction`, `EntryPointInteraction`),
+  `ComponentInteraction` (`ButtonInteraction`, `StringSelectInteraction`,
+  `UserSelectInteraction`, `RoleSelectInteraction`,
+  `ChannelSelectInteraction`, `MentionableSelectInteraction`,
+  `ModalSubmitInteraction`) e `AutocompleteInteraction`.
+- Decoradores de componente com entrega tipada: `@button`,
+  `@string_select`, `@user_select`, `@role_select`, `@channel_select`,
+  `@mentionable_select`, `@modal_submit` — todos açúcar sobre
+  `@responder`, mesmo registry.
+- Validação de assinatura de handler na importação:
+  `HandlerSignatureError` — primeiro parâmetro tem que ser anotado com
+  a classe que será entregue (`Any` e protocolo passam; `object` não).
+- Estados `InteractionState.COMPLETED` (depois de
+  `delete_original_response`) e `EXPIRED` (token de 15 min, calculado
+  com preguiça a partir do snowflake; ids sintéticos nunca expiram),
+  com `InvalidInteractionState.is_expired()` e os predicados
+  correspondentes.
+- `docs/api/interactions-architecture.md` e
+  `docs/api/interaction-response-methods.md` — as duas referências de
+  superfície de interação (reconstituídas da especificação original).
+
+### Mudado
+
+- **Métodos de resposta renomeados**: `reply` → `respond`, `edit` →
+  `edit_original_response`, `delete` → `delete_original_response`,
+  `fetch`/`fetch_reply` → `fetch_original_response`, `follow_up` →
+  `followup`, `send_modal` → `open_modal`. São os nomes nos dois lados
+  — `InteractionContext` interno e a interação tipada.
+- `InteractionState.MODAL` → `MODAL_OPENED`; `delete_original_response`
+  passa a transicionar para `COMPLETED` a partir de `DEFERRED` e
+  `ANSWERED`.
+- **Sintaxe de rota do `custom_id`**: `{param}` obrigatório,
+  `{?param}` opcional, `**`/`**{nome}` wildcard — com o parâmetro
+  permitido **dentro** do segmento (`/produto:{product_id}:comprar`).
+  `build_custom_id` valida valor vazio além do que já validava.
+- `@event` passa a entregar **só o payload** — mesmo contrato do
+  `client.on`; aridade esperada deixa de contar contexto. Middleware e
+  `on_error` recebem o `EventFrame` interno
+  (`kryncord.events.context`, não exportado).
+- `dispatch_application_command` não aceita mais `cache=`.
+
+### Removido
+
+- **`CommandContext`, `ResponderContext`, `EventContext` e
+  `AutocompleteContext`** — os contextos genéricos não existem mais,
+  sem aliases de depreciação: migração de grep, não de dois anos.
+- **`InteractionStateError`** → `InvalidInteractionState`.
+- **Sintaxe de rota antiga** (`:param`, `?:param`, `**:nome`):
+  `parse_rota` recusa com `ResponderDefinitionError` citando a troca.
+- `EventDispatcher.add(..., with_context=)` e `EventEntry.with_context`
+  — não há mais caminho de contexto na frente do payload.
+- `commands/context.py` e `responders/context.py` (módulos apagados).
+
 ## [0.1.0b2] — 2026-10-16
 
 Versão de documentação e metadados: nenhum código de runtime mudou.
@@ -70,6 +134,7 @@ próprios, sem dependência de `discord.py`.
 - `MESSAGE_CONTENT` é privileged: precisa ser ligado no portal do
   Discord antes de pedir o intent.
 
-[Unreleased]: https://github.com/KrynCord/kryncord/compare/v0.1.0b2...HEAD
+[Unreleased]: https://github.com/KrynCord/kryncord/compare/v0.2.0b1...HEAD
+[0.2.0b1]: https://github.com/KrynCord/kryncord/releases/tag/v0.2.0b1
 [0.1.0b2]: https://github.com/KrynCord/kryncord/releases/tag/v0.1.0b2
 [0.1.0b1]: https://github.com/KrynCord/kryncord/releases/tag/v0.1.0b1

@@ -5,4 +5,4 @@ divergam. `pyproject.toml` é a fonte da verdade para o build; este
 arquivo é a fonte da verdade para o runtime.
 """
 
-__version__ = "0.1.0b2"
+__version__ = "0.2.0b1"
