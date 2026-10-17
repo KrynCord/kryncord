@@ -222,6 +222,18 @@ class GatewayClient:
         return self._status
 
     @property
+    def latency(self) -> float | None:
+        """Round-trip do heartbeat (``op 1`` → ``ACK``) em ms.
+
+        `None` antes do primeiro ACK. É o relógio monotônico da
+        `HeartbeatState` que mede — o mesmo que vira log de diagnóstico
+        e o ``ping`` que o `Client.latency` expõe. Numa reconexão, o
+        último valor fica legível até o primeiro ACK da nova conexão
+        chegar (o `reset()` limpa a janela pendente, não a medição).
+        """
+        return self._heartbeat.state.latency_ms
+
+    @property
     def ready(self) -> bool:
         """`True` quando a sessão está estabelecida e eventos fluem."""
         return self._status.is_established

@@ -203,6 +203,23 @@ class Client:
         return self._gateway
 
     @property
+    def latency(self) -> float | None:
+        """Latência do Gateway em ms — o round-trip do heartbeat.
+
+        `None` antes do `start()`, e antes do primeiro ``ACK``. É o
+        mesmo número que o ``client.latency`` do discord.py (que
+        devolve **segundos**) e o ``client.ws.ping`` do discord.js
+        (ms) mostram no ``/ping``; aqui em ms, que é a unidade do
+        resto da casa.
+
+        Isto **não** é a latência REST — a do `client.api` é medida
+        cronometrando uma chamada, como o `/ping` do bot faz, e vem
+        em outro campo.
+        """
+        gateway = self._gateway
+        return None if gateway is None else gateway.latency
+
+    @property
     def api(self) -> DiscordAPI:
         """As operações REST, organizadas por recurso.
 

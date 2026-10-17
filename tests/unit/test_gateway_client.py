@@ -731,3 +731,47 @@ async def test_compression_query_param_is_sent_when_requested(
 
     await gateway.close()
     await task
+
+
+# --------------------------------------------------------------------------
+# Latência
+# --------------------------------------------------------------------------
+
+
+async def test_latency_none_antes_do_primeiro_ack() -> None:
+    """`latency` é o round-trip do heartbeat em ms (``op 1`` →
+    ``ACK``) — o mesmo número que o ``client.latency`` do discord.py
+    (segundos) e o ``client.ws.ping`` do discord.js (ms) mostram.
+
+    `None` antes da primeira medição: zero aqui diria "perfeição"
+    sobre algo que nunca foi medido. Mandado mas não respondido
+    também é `None` — a resposta é que mede, não o envio."""
+    clock = FakeClock()
+    gateway = make_gateway(FakeGatewayTransport(), clock=clock, sleeper=FakeSleeper(clock))
+
+    assert gateway.latency is None
+
+    gateway._heartbeat.state.mark_sent()
+    assert gateway.latency is None
+
+    gateway._heartbeat.state.ack()
+    assert isinstance(gateway.latency, float)
+    assert gateway.latency >= 0
+
+
+async def test_latency_apos_o_ready_e_float(clock: FakeClock, sleeper: FakeSleeper) -> None:
+    """O caminho real: o transporte com `auto_ack` imita o Discord, o
+    heartbeat bate e o ACK chega — a latência fica legível sem nada
+    de extra do chamador."""
+    transport = FakeGatewayTransport()
+    transport.feed_payload(hello())
+    transport.feed_payload(ready())
+
+    gateway = make_gateway(transport, clock=clock, sleeper=sleeper)
+    task = await run_until_ready(gateway)
+    await settle()
+
+    assert isinstance(gateway.latency, float)
+
+    await gateway.close()
+    await task

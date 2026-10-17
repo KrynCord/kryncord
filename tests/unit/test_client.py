@@ -369,6 +369,7 @@ async def test_api_existe_desde_a_construcao() -> None:
     client = _client()
     assert isinstance(client.api, DiscordAPI)
     assert client.gateway is None  # Gateway só nasce no `start()`
+    assert client.latency is None  # e sem ACK não há latência a mostrar
     assert client.is_started is False
 
 

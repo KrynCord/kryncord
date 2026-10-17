@@ -5,6 +5,19 @@ numeração em [SemVer](https://semver.org/lang/pt-BR/).
 
 ## [Unreleased]
 
+## [0.2.0b3] — 2026-10-17
+
+A latência do Gateway vira superfície pública — o número que o
+`client.latency` do discord.py (segundos) e o `client.ws.ping` do
+discord.js (ms) mostram no `/ping`, que aqui não tinha como ler.
+
+### Adicionado
+
+- `Client.latency` e `GatewayClient.latency` — round-trip do
+  heartbeat (``op 1`` → ``ACK``) em ms, medido no relógio monotônico
+  da `HeartbeatState`. `None` antes do `start()` e antes do primeiro
+  ACK: zero seria mentira sobre algo que não foi medido.
+
 ## [0.2.0b2] — 2026-10-17
 
 Correção de caminho do `api` no despacho. O `Client` entrega o
@@ -164,7 +177,8 @@ próprios, sem dependência de `discord.py`.
 - `MESSAGE_CONTENT` é privileged: precisa ser ligado no portal do
   Discord antes de pedir o intent.
 
-[Unreleased]: https://github.com/KrynCord/kryncord/compare/v0.2.0b2...HEAD
+[Unreleased]: https://github.com/KrynCord/kryncord/compare/v0.2.0b3...HEAD
+[0.2.0b3]: https://github.com/KrynCord/kryncord/releases/tag/v0.2.0b3
 [0.2.0b2]: https://github.com/KrynCord/kryncord/releases/tag/v0.2.0b2
 [0.2.0b1]: https://github.com/KrynCord/kryncord/releases/tag/v0.2.0b1
 [0.1.0b2]: https://github.com/KrynCord/kryncord/releases/tag/v0.1.0b2
