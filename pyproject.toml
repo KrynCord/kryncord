@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "kryncord"
-version = "0.2.0b1"
+version = "0.2.0b2"
 description = "Async-first Discord API library for Python"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -70,7 +70,12 @@ addopts = "-ra --strict-markers --strict-config"
 # raiz do projeto no `sys.path`. `python -m pytest` coloca o CWD lá
 # sozinho; o binário `pytest` (que é o que a CI roda) não — e aí a
 # coleção inteira falha com ModuleNotFoundError.
-pythonpath = ["."]
+#
+# `src` entra na frente do site-packages: a CI instala com `-e`, e
+# sem isto um `pip install kryncord` no mesmo interpretador faz os
+# testes rodarem contra o **wheel instalado** em vez da árvore de
+# trabalho — e aí o teste não testa o que acabou de mudar.
+pythonpath = [".", "src"]
 
 [tool.ruff]
 line-length = 100

@@ -17,6 +17,7 @@ aparece como falha num outro teste qualquer (`K12`).
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
 import pytest
@@ -32,6 +33,7 @@ from kryncord.intents import Intents
 from kryncord.interactions.dispatch import dispatch_interaction
 from kryncord.models.interaction import Interaction
 from kryncord.registry import Registry
+from tests.unit.test_api import make_api, no_content
 
 CHAT = ApplicationCommandType.CHAT_INPUT
 
@@ -1079,3 +1081,135 @@ class TestOrdemDoDispatch:
         )
 
         assert len(recebido) == 1
+
+
+# ---------------------------------------------------------------------------
+# O `api` que desce do `Client`
+# ---------------------------------------------------------------------------
+
+
+class TestApiRealNoDespacho:
+    """O `Client` entrega `client.api` — o `DiscordAPI` **raiz** — ao
+    despacho; os contextos guardam o namespace (`api.interactions`), e
+    o `interacoes_de` na entrada de cada ramo é quem garante isso
+    (`0007`: cada camada com o vocabulário da camada).
+
+    Bug que estes testes prendem: `DiscordAPI` não tem `respond`, e a
+    `/ping` ao vivo morria com `AttributeError` dentro da resposta.
+    Passou pelos testes inteiros porque o duplo de `api` era plano."""
+
+    async def test_comando_responde_pelo_callback(self) -> None:
+        reg = Registry()
+        api, captured = make_api(no_content())
+
+        inst = create_command(name="ping", description="Ping", registry=reg.commands)
+
+        @inst
+        async def ping(ctx: CommandInteraction) -> None:
+            await ctx.respond("pong")
+
+        ok = await dispatch_interaction(
+            {"id": "111", "type": 2, "token": "tk", "data": {"name": "ping"}},
+            api,
+            registry=reg,
+        )
+
+        assert ok is True
+        assert captured[0].url.path == "/api/v10/interactions/111/tk/callback"
+        corpo = json.loads(captured[0].content)
+        assert corpo["type"] == 4
+        assert corpo["data"]["content"] == "pong"
+
+    async def test_responder_atualiza_pelo_callback(self) -> None:
+        """O ramo de componentes é outro ponto de entrada — o mesmo
+        namespace normalizado, o mesmo `update` plano no contexto."""
+        reg = Registry()
+        api, captured = make_api(no_content())
+
+        async def clicou(ctx: Any) -> None:
+            await ctx.update("ok")
+
+        reg.responders.register("/ping", clicou, types=(ResponderType.BUTTON,))
+
+        ok = await dispatch_interaction(
+            {
+                "id": "111",
+                "type": 3,
+                "token": "tk",
+                "data": {"custom_id": "/ping", "component_type": 2},
+            },
+            api,
+            registry=reg,
+        )
+
+        assert ok is True
+        assert captured[0].url.path == "/api/v10/interactions/111/tk/callback"
+        corpo = json.loads(captured[0].content)
+        assert corpo["type"] == 7
+        assert corpo["data"]["content"] == "ok"
+
+    async def test_autocomplete_com_handler_usa_o_namespace(self) -> None:
+        """A `AutocompleteInteraction` recebe o `api` **também** como
+        parâmetro próprio — o mesmo namespace, o mesmo tipo 8."""
+        reg = Registry()
+        api, captured = make_api(no_content())
+
+        inst = create_command(name="ping", description="Ping", registry=reg.commands)
+
+        @inst
+        async def ping(ctx: CommandInteraction) -> None: ...
+
+        @inst.autocomplete()
+        async def sugere(ctx: AutocompleteInteraction) -> list[dict[str, Any]]:
+            return [{"name": "pinguim", "value": "ping"}]
+
+        ok = await dispatch_interaction(
+            {
+                "id": "111",
+                "type": 4,
+                "token": "tk",
+                "data": {
+                    "name": "ping",
+                    "options": [{"type": 3, "name": "q", "value": "pi", "focused": True}],
+                },
+            },
+            api,
+            registry=reg,
+        )
+
+        assert ok is True
+        assert captured[0].url.path == "/api/v10/interactions/111/tk/callback"
+        corpo = json.loads(captured[0].content)
+        assert corpo["type"] == 8
+        assert corpo["data"]["choices"] == [{"name": "pinguim", "value": "ping"}]
+
+    async def test_autocomplete_sem_handler_responde_vazio(self) -> None:
+        """O fallback vazio (0021) chama `api.autocomplete` direto no
+        parâmetro cru — o `interacoes_de` da entrada cobre ele também."""
+        reg = Registry()
+        api, captured = make_api(no_content())
+
+        inst = create_command(name="ping", description="Ping", registry=reg.commands)
+
+        @inst
+        async def ping(ctx: CommandInteraction) -> None: ...
+
+        ok = await dispatch_interaction(
+            {
+                "id": "111",
+                "type": 4,
+                "token": "tk",
+                "data": {
+                    "name": "ping",
+                    "options": [{"type": 3, "name": "q", "value": "pi", "focused": True}],
+                },
+            },
+            api,
+            registry=reg,
+        )
+
+        assert ok is False
+        assert captured[0].url.path == "/api/v10/interactions/111/tk/callback"
+        corpo = json.loads(captured[0].content)
+        assert corpo["type"] == 8
+        assert corpo["data"]["choices"] == []

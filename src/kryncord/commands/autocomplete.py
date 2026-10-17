@@ -22,6 +22,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
+from kryncord.api import interacoes_de
 from kryncord.commands.instance import CommandInstance
 from kryncord.enums import InteractionType
 from kryncord.interactions.autocomplete import (
@@ -63,6 +64,7 @@ async def dispatch_autocomplete(
     `True` se um handler atendeu. Sem handler, responde vazio — o
     fallback legítimo — e devolve `False` para o chamador saber.
     """
+    api = interacoes_de(api)
     foco = foco_de(interaction)
     if foco is None or instance is None:
         await _responde_vazio(interaction, api)

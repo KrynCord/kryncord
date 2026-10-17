@@ -5,6 +5,36 @@ numeração em [SemVer](https://semver.org/lang/pt-BR/).
 
 ## [Unreleased]
 
+## [0.2.0b2] — 2026-10-17
+
+Correção de caminho do `api` no despacho. O `Client` entrega o
+`DiscordAPI` **raiz** aos despachos, e ele não tem `respond` — a
+primeira `/ping` ao vivo morria com `AttributeError` dentro da
+resposta. Passou pela suíte inteira porque o duplo de `api` dos
+testes era plano (`TestApiRealNoDespacho` prende isto agora, com o
+`DiscordAPI` real sobre transporte falso).
+
+### Adicionado
+
+- `kryncord.api.interacoes_de` — o `InteractionsAPI` de um `api`,
+  seja o `DiscordAPI` raiz (o `client.api`) ou o próprio namespace.
+  Os três ramos de despacho (`dispatch_application_command`,
+  `dispatch_autocomplete`, `dispatch_responder`) normalizam na
+  entrada; os contextos seguem guardando o namespace.
+- `TestApiRealNoDespacho` — despacho ponta a ponta com `DiscordAPI`
+  real: comando → tipo 4, componente → tipo 7, autocomplete → tipo 8
+  (com handler e no fallback vazio).
+- `pythonpath` do pytest inclui `src` — o teste local roda contra a
+  árvore de trabalho mesmo com o wheel instalado no mesmo
+  interpretador (a CI já rodava assim, por causa do `-e`).
+
+### Mudado
+
+- `InteractionsAPI.callback` manda `auth=False`: o token da interação
+  vai na URL, e `Authorization: Bot` junto seria dupla credencial que
+  mascara qual falhou num 403 — o mesmo que o discord.js faz em todo
+  `interactionCallback`.
+
 ## [0.2.0b1] — 2026-10-17
 
 A migração **breaking** da superfície de interações (ADR 0031): os
@@ -134,7 +164,8 @@ próprios, sem dependência de `discord.py`.
 - `MESSAGE_CONTENT` é privileged: precisa ser ligado no portal do
   Discord antes de pedir o intent.
 
-[Unreleased]: https://github.com/KrynCord/kryncord/compare/v0.2.0b1...HEAD
+[Unreleased]: https://github.com/KrynCord/kryncord/compare/v0.2.0b2...HEAD
+[0.2.0b2]: https://github.com/KrynCord/kryncord/releases/tag/v0.2.0b2
 [0.2.0b1]: https://github.com/KrynCord/kryncord/releases/tag/v0.2.0b1
 [0.1.0b2]: https://github.com/KrynCord/kryncord/releases/tag/v0.1.0b2
 [0.1.0b1]: https://github.com/KrynCord/kryncord/releases/tag/v0.1.0b1

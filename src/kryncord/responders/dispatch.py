@@ -25,6 +25,7 @@ from collections.abc import Callable, Iterable, Mapping
 from contextlib import suppress
 from typing import Any
 
+from kryncord.api import interacoes_de
 from kryncord.enums import ResponderType
 from kryncord.errors import BlockHandlers, DispatchError
 from kryncord.interactions.components import ComponentInteraction, classe_para
@@ -121,6 +122,7 @@ async def dispatch_responder(
     automático na cara do usuário piora o bot que está no meio de um
     deploy.
     """
+    api = interacoes_de(api)
     interaction_ctx = InteractionContext(interaction, api)
     custom_id = interaction.custom_id
     tipo = _tipo_de(interaction)

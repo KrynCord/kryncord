@@ -45,6 +45,7 @@ from collections.abc import Callable, Iterable, Mapping
 from types import UnionType
 from typing import Any, Union, cast, get_args, get_origin, get_type_hints
 
+from kryncord.api import interacoes_de
 from kryncord.commands.instance import CommandInstance
 from kryncord.commands.option import OptionType
 from kryncord.enums import ApplicationCommandType
@@ -91,6 +92,7 @@ async def dispatch_application_command(
     "ninguém cuidou" e disparar o `on_not_found` em cima de uma falha,
     que é como se vê "algo deu errado" duas vezes.
     """
+    api = interacoes_de(api)
     data = interaction.data or {}
     nome = data.get("name")
     if not isinstance(nome, str):

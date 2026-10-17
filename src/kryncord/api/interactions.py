@@ -69,6 +69,11 @@ class InteractionsAPI:
         montam `data` e chamam este. `response_type` aceita o número ou
         o `InteractionResponseType`, porque quem decora ``5`` é quem
         lê o docs do Discord toda vez.
+
+        O token vai na URL, então `auth=False`: mandar `Authorization:
+        Bot` junto seria dupla credencial que o Discord aceita mas que
+        mascara qual falhou num 403 — e é o mesmo que o discord.js
+        faz (`auth: false` em todo `interactionCallback`).
         """
         await self._rest.request(
             "POST",
@@ -76,6 +81,7 @@ class InteractionsAPI:
             json={"type": int(response_type), "data": data}
             if data
             else {"type": int(response_type)},
+            auth=False,
         )
 
     async def respond(

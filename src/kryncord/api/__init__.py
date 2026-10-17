@@ -37,6 +37,8 @@ quebrar nada — é aditivo.
 
 from __future__ import annotations
 
+from typing import Any
+
 from kryncord.api.applications import ApplicationsAPI
 from kryncord.api.channels import ChannelsAPI
 from kryncord.api.guilds import GuildsAPI
@@ -59,6 +61,7 @@ __all__ = [
     "RolesAPI",
     "UsersAPI",
     "WebhooksAPI",
+    "interacoes_de",
 ]
 
 
@@ -109,3 +112,21 @@ class DiscordAPI:
 
     async def __aexit__(self, *exc_info: object) -> None:
         await self.aclose()
+
+
+def interacoes_de(api: Any) -> InteractionsAPI:
+    """O `InteractionsAPI` de um `api`, seja lá qual dos dois formatos.
+
+    Chegam dois formatos aqui: o `DiscordAPI` raiz (o `client.api`, que
+    é o que o `Client` entrega ao despacho) e o próprio `InteractionsAPI`
+    (o que os testes constroem como duplo). Os contextos guardam o
+    **namespace** — o `InteractionContext` anota `api: InteractionsAPI` —
+    então o despacho normaliza na entrada, uma vez, e o resto da cadeia
+    só enxerga o namespace.
+
+    Sem isto, `DiscordAPI.respond` não existe e a primeira `/ping`
+    morre com `AttributeError` dentro da resposta. O bug passou pelos
+    testes porque o duplo já era plano (`0007`: cada camada com o
+    vocabulário da camada — aqui, o da camada de interações).
+    """
+    return api.interactions if isinstance(api, DiscordAPI) else api
