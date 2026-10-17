@@ -5,14 +5,14 @@ Dois níveis, como a ideia 02 §2 pede:
 ```python
 # o decorator direto — o caso de 90% dos comandos
 @command(name="ping", description="Responde com pong")
-async def ping(ctx: CommandContext) -> None: ...
+async def ping(interaction: CommandInteraction) -> None: ...
 
 # a âncora + handler — o caso da ideia 04 §2, com filhos em outros módulos
 command = create_command(name="store")
 
 
 @command()
-async def run(ctx: CommandContext) -> StoreData | None: ...
+async def run(interaction: CommandInteraction) -> StoreData | None: ...
 
 command.sub("close", close_handler)
 ```
@@ -39,6 +39,11 @@ síncrono, `is_global` junto com `guild` — tudo `TypeError` ou
 `CommandDefinitionError` na linha do decorator. Descobrir no clique
 seria descobrir depois do bot publicado, e a mensagem do Discord
 ("algo deu errado") não aponta para arquivo nenhum.
+
+A anotação do primeiro parâmetro entra na mesma conta (`0031`): a
+classe entregue vem do `type=` do comando, e o decorator confere se a
+anotação diz a mesma coisa — `HandlerSignatureError` na importação,
+não um `AttributeError` no clique.
 """
 
 from __future__ import annotations
@@ -53,6 +58,8 @@ from kryncord.commands.option import Option
 from kryncord.commands.validation import validate_definition
 from kryncord.enums import ApplicationCommandType
 from kryncord.errors import CommandDefinitionError
+from kryncord.interactions.commands import classe_de_comando
+from kryncord.internal.signatures import valida_interacao
 from kryncord.permissions import parse_permissions_list
 
 #: O registry para onde registrar quando não apontam outro. O import é
@@ -133,10 +140,12 @@ def command(
 ) -> Callable[[Handler], Handler]:
     """Decorator de comando. Devolve a **função original**.
 
-    O handler tem que ser `async def` (`0010`) e aceitar pelo menos o
-    `ctx` — os dois checados aqui, na importação. Um `async def ping()`
-    sem parâmetros registraria um comando que falharia com `TypeError`
-    em cada clique, e a mensagem do Discord não diria nada sobre
+    O handler tem que ser `async def` (`0010`), aceitar pelo menos um
+    parâmetro e anotá-lo com a interação certa para o `type=` — os três
+    checados aqui, na importação (`0031`). Um `async def ping()` sem
+    parâmetros registraria um comando que falharia com `TypeError` em
+    cada clique; um anotado com a classe errada leria `interaction.options`
+    inexistente — e a mensagem do Discord não diria nada sobre
     `inspect.signature`.
 
     **`on_not_found` não existe aqui** (`0030`): ele é uma pergunta do
@@ -146,7 +155,11 @@ def command(
 
     def decorador(fn: Handler) -> Handler:
         _exige_assincrono(fn, f"handler do comando {name!r}")
-        _assinatura_do_handler(fn)
+        valida_interacao(
+            fn,
+            classe_de_comando(type),
+            f"handler do comando {name!r}",
+        )
         instancia = create_command(
             name=name,
             description=description,
@@ -267,30 +280,6 @@ def _global() -> Any:
     from kryncord.registry import registry as _global_registry
 
     return _global_registry.commands
-
-
-def _assinatura_do_handler(fn: Handler) -> None:
-    """Confere se o handler aceita pelo menos o `ctx`.
-
-    Separado do `_exige_assincrono` porque são falhas diferentes: uma é
-    "escreveu `def` em vez de `async def`", a outra é "escreveu
-    `async def ping()`". As duas falham em cada clique, e as duas são
-    óbvias na importação.
-    """
-    try:
-        parametros = [
-            p
-            for p in inspect.signature(fn).parameters.values()
-            if p.kind in (p.POSITIONAL_ONLY, p.POSITIONAL_OR_KEYWORD)
-        ]
-    except (TypeError, ValueError):
-        return
-    if not parametros:
-        raise TypeError(
-            f"handler do comando {getattr(fn, '__qualname__', fn)!r} não aceita "
-            "argumentos — todo handler recebe `ctx` como primeiro. Escreva "
-            "`async def meu_comando(ctx): ...`"
-        )
 
 
 __all__ = ["command", "create_command"]

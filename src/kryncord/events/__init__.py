@@ -8,15 +8,15 @@ acidental.
 
 O `@event` vive em `decorators.py` e valida a aridade na importação;
 o `client.on` vive em `client.py` e valida em runtime. São dois caminhos
-para a mesma tabela — `EVENT_PAYLOADS`, em `payloads.py` —, e a
-diferença entre eles é o `EventContext` que só o decorator entrega.
+para a mesma tabela — `EVENT_PAYLOADS`, em `payloads.py` —, e os dois
+entregam **o payload só** (`0031`): não existe contexto na frente do
+payload nesta biblioteca.
 
 Ver `events/dispatcher.py` para a política de execução escolhida e o
 porquê, e `events/payloads.py` para a tabela que decide o que o
 handler recebe.
 """
 
-from kryncord.events.context import EventContext
 from kryncord.events.decorators import event
 from kryncord.events.dispatcher import (
     REGISTRY,
@@ -43,7 +43,6 @@ __all__ = [
     "RAW_TO_SNAKE",
     "REGISTRY",
     "ErrorHandler",
-    "EventContext",
     "EventDispatcher",
     "EventEntry",
     "EventHandler",

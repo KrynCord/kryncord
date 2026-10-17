@@ -6,8 +6,13 @@ segundo mecanismo, e não deveria — uma lista de "também passa isto"
 seria um protocolo paralelo que só existe no nosso código.
 
 ```
-command.run(ctx)  ->  grupo.run(ctx, valor)  ->  sub.run(ctx, valor)
+command.run(inter)  ->  grupo.run(inter, valor)  ->  sub.run(inter, valor)
 ```
+
+O primeiro parâmetro é sempre a **interação tipada** (`0031`):
+`CommandInteraction` para CHAT_INPUT, `UserCommandInteraction` para
+menu USER, e assim por diante — o dispatcher escolhe a classe pelo tipo
+do comando registrado, e o handler escreve a anotação que corresponde.
 
 ## O valor pode não existir
 
@@ -24,7 +29,7 @@ ausência do pai.
 ## Filho sem parâmetro descarta
 
 A tabela do `0026` §3 é o contrato, e ela tem um caso que não é erro:
-`async def add(ctx)` num filho cujo pai devolve alguma coisa. O valor é
+`async def add(inter)` num filho cujo pai devolve alguma coisa. O valor é
 descartado, e é correto — é como se declara "eu não uso o que vem de
 cima" sem inventar um parâmetro morto só para a assinatura fechar.
 
@@ -40,11 +45,14 @@ from collections.abc import Callable, Iterable, Mapping
 from types import UnionType
 from typing import Any, Union, cast, get_args, get_origin, get_type_hints
 
-from kryncord.commands.context import CommandContext
 from kryncord.commands.instance import CommandInstance
 from kryncord.commands.option import OptionType
 from kryncord.enums import ApplicationCommandType
 from kryncord.errors import BlockHandlers, DispatchError
+from kryncord.interactions.commands import (
+    CommandInteraction,
+    classe_de_comando,
+)
 from kryncord.interactions.response import InteractionContext
 from kryncord.internal.compose import block
 from kryncord.logging import get_logger
@@ -66,7 +74,6 @@ async def dispatch_application_command(
     registry: Any,
     client: Any = None,
     state: dict[str, Any] | None = None,
-    cache: Any = None,
     middleware: Iterable[Callable[..., Any]] = (),
     on_error: Callable[..., Any] | None = None,
     on_not_found: Callable[..., Any] | None = None,
@@ -91,25 +98,16 @@ async def dispatch_application_command(
 
     instancia = instancia_de(registry, interaction)
     if instancia is None:
-        await _nao_encontrado(on_not_found, interaction, api, client, cache, nome)
+        await _nao_encontrado(on_not_found, interaction, api, client, nome)
         return False
 
-    interaction_ctx = InteractionContext(interaction, api)
-    ctx = CommandContext(
-        interaction_ctx,
-        guild=_guild(interaction, cache),
-        channel=_channel(interaction, cache),
-        user=_usuario(interaction),
-        member=interaction.member,
-        client=client,
-        state=state if state is not None else {},
-    )
+    inter = _interacao(interaction, api, instancia.type, client, state)
 
     cadeia = (*middleware, *instancia.middleware)
     try:
         for item in cadeia:
-            await item(ctx, block)
-        await _cascata(instancia, ctx, data)
+            await item(inter, block)
+        await _cascata(instancia, inter, data)
     except BlockHandlers:
         #: Quem chamou `block()` respondeu ali — o clique foi atendido,
         #: e `on_error` não roda (`0017`: bloqueio é tratamento).
@@ -121,13 +119,35 @@ async def dispatch_application_command(
         #: um global sobrescrever silenciosamente o que o autor do
         #: comando escreveu.
         alvo = instancia.on_error if instancia.on_error is not None else on_error
-        await _erro(exc, ctx, alvo)
+        await _erro(exc, inter, alvo)
         return True
     return True
 
 
+def _interacao(
+    interaction: Interaction,
+    api: Any,
+    tipo_comando: ApplicationCommandType,
+    client: Any,
+    state: dict[str, Any] | None,
+) -> CommandInteraction:
+    """A interação tipada deste dispatch — a classe vem do tipo do comando.
+
+    `CommandInteraction` para CHAT_INPUT, `UserCommandInteraction` para
+    menu USER, e assim por diante (`0031`). A escolha vem do **registro**
+    (`instancia.type`), que é o que foi publicado no Discord — nunca da
+    anotação, que seria só uma promessa do autor.
+    """
+    classe = classe_de_comando(tipo_comando)
+    return classe(
+        InteractionContext(interaction, api),
+        client=client,
+        state=state if state is not None else {},
+    )
+
+
 async def _cascata(
-    instancia: CommandInstance, ctx: CommandContext, data: Mapping[str, Any]
+    instancia: CommandInstance, inter: CommandInteraction, data: Mapping[str, Any]
 ) -> None:
     """Roda os níveis da esquerda para a direita, injetando o valor.
 
@@ -135,14 +155,14 @@ async def _cascata(
     não participa, e o que vem de cima continua andando. O `run` da raiz
     é opcional (ideia 04 §6) e este é o lugar onde isso vira código.
     """
-    valor = await instancia.run(ctx)
+    valor = await instancia.run(inter)
 
     grupo, sub = _caminho(data)
     if grupo is not None:
         handler_grupo = instancia.grupo_handler(grupo)
         if handler_grupo is not None:
             valor = await _injeta(
-                handler_grupo, ctx, valor, f"grupo {grupo!r} de {instancia.name!r}"
+                handler_grupo, inter, valor, f"grupo {grupo!r} de {instancia.name!r}"
             )
         handler_sub = instancia.groups.get(grupo, {}).get(sub or "")
     elif sub is not None:
@@ -158,7 +178,7 @@ async def _cascata(
             f"{sub!r} que não está registrado — registro e payload "
             "divergiram; rode `sync` de novo"
         )
-    await _injeta(handler_sub, ctx, valor, f"subcomando {sub!r} de {instancia.name!r}")
+    await _injeta(handler_sub, inter, valor, f"subcomando {sub!r} de {instancia.name!r}")
 
 
 # -----------------------------------------------------------------------
@@ -166,7 +186,9 @@ async def _cascata(
 # -----------------------------------------------------------------------
 
 
-async def _injeta(handler: Callable[..., Any], ctx: CommandContext, valor: Any, onde: str) -> Any:
+async def _injeta(
+    handler: Callable[..., Any], inter: CommandInteraction, valor: Any, onde: str
+) -> Any:
     """Chama o filho com o valor, se ele aceita, e com o tipo que prometeu.
 
     Três saídas, e as três estão na tabela do `0026` §3:
@@ -177,18 +199,18 @@ async def _injeta(handler: Callable[..., Any], ctx: CommandContext, valor: Any, 
     """
     n_posicionais, anotacao, varargs = _parametros(handler)
     if n_posicionais < 2 and not varargs:
-        return await _chama(handler, ctx)
+        return await _chama(handler, inter)
 
     if not _confere(anotacao, valor):
         raise DispatchError(
             f"{onde}: anotava `{_nome(anotacao)}`, recebeu `{type(valor).__name__}` ({valor!r})"
         )
-    return await _chama(handler, ctx, valor)
+    return await _chama(handler, inter, valor)
 
 
-async def _chama(handler: Callable[..., Any], ctx: CommandContext, *args: Any) -> Any:
+async def _chama(handler: Callable[..., Any], inter: CommandInteraction, *args: Any) -> Any:
     """Chama e espera, sem virar coroutine pendurada."""
-    return await handler(ctx, *args)
+    return await handler(inter, *args)
 
 
 def _parametros(handler: Callable[..., Any]) -> tuple[int, Any, bool]:
@@ -335,35 +357,8 @@ def _caminho(data: Mapping[str, Any]) -> tuple[str | None, str | None]:
 
 
 # -----------------------------------------------------------------------
-# Contexto
+# Interação
 # -----------------------------------------------------------------------
-
-
-def _guild(interaction: Interaction, cache: Any) -> Any:
-    """A guild do cache, se houver — `None` em DM ou antes do `GUILD_CREATE`."""
-    if cache is None or interaction.guild_id is None:
-        return None
-    return cache.get_guild(interaction.guild_id)
-
-
-def _channel(interaction: Interaction, cache: Any) -> Any:
-    """O canal do cache, pelo mesmo motivo."""
-    if cache is None or interaction.channel_id is None:
-        return None
-    return cache.get_channel(interaction.channel_id)
-
-
-def _usuario(interaction: Interaction) -> Any:
-    """Quem invocou: `user` direto, ou o de dentro do `member`.
-
-    Em guild o payload traz os dois; em DM vem só o `user`. Ler o
-    `member` primeiro seria errado — o `member.user` do payload é uma
-    cópia parcial e o `user` é a conta inteira.
-    """
-    if interaction.user is not None:
-        return interaction.user
-    membro = interaction.member
-    return membro.user if membro is not None else None
 
 
 async def _nao_encontrado(
@@ -371,7 +366,6 @@ async def _nao_encontrado(
     interaction: Interaction,
     api: Any,
     client: Any,
-    cache: Any,
     nome: str,
 ) -> None:
     """Sem comando registrado — é o `on_not_found` de comandos que decide.
@@ -386,21 +380,16 @@ async def _nao_encontrado(
             nome,
         )
         return
-    ctx = CommandContext(
-        InteractionContext(interaction, api),
-        guild=_guild(interaction, cache),
-        channel=_channel(interaction, cache),
-        user=_usuario(interaction),
-        member=interaction.member,
-        client=client,
-    )
+    inter = CommandInteraction(InteractionContext(interaction, api), client=client)
     try:
-        await on_not_found(ctx)
+        await on_not_found(inter)
     except Exception:
         _log.exception("on_not_found do comando %r falhou", nome)
 
 
-async def _erro(exc: Exception, ctx: CommandContext, on_error: Callable[..., Any] | None) -> None:
+async def _erro(
+    exc: Exception, inter: CommandInteraction, on_error: Callable[..., Any] | None
+) -> None:
     """O `on_error` de comando, ou o default do `0026` §11.
 
     O default não é só logar: ele tenta **uma** efêmera se ninguém
@@ -409,26 +398,26 @@ async def _erro(exc: Exception, ctx: CommandContext, on_error: Callable[..., Any
     esta aplicação" — que é a mensagem mais ruim que o Discord tem.
     """
     if on_error is None:
-        _log.error("Erro no comando %s", ctx.interaction.data, exc_info=exc)
-        await _tenta_efemera(ctx)
+        _log.error("Erro no comando %s", inter.interaction.data, exc_info=exc)
+        await _tenta_efemera(inter)
         return
     try:
-        await on_error(ctx, exc)
+        await on_error(inter, exc)
     except Exception:
         _log.exception("on_error do comando também falhou")
 
 
-async def _tenta_efemera(ctx: CommandContext) -> None:
+async def _tenta_efemera(inter: CommandInteraction) -> None:
     """Uma efêmera de desculpa, se ainda dá tempo — e só uma.
 
     Engolida de propósito: se a efêmera também falhar (token expirado,
     permissão, rede), o erro verdadeiro é o que já está no log. Duas
     pilhas para o mesmo problema não ajudam ninguém.
     """
-    if ctx.is_responded():
+    if inter.is_responded():
         return
     with contextlib.suppress(Exception):
-        await ctx.reply(
+        await inter.respond(
             "Algo deu errado ao executar este comando. O erro já foi registrado.",
             ephemeral=True,
         )

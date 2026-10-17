@@ -108,7 +108,7 @@ class EventOptions:
 
     `sequential` em ordem de registro — é o default porque é o único
     modo em que a ordem significa algo para quem escreve o bot, e o
-    `args` mutável do `EventContext` só funciona aqui.
+    `args` mutável do `EventFrame` só funciona aqui.
 
     `concurrent` despacha num `TaskGroup` e espera todos: handlers
     independentes pagam latência só uma vez. O cancelamento no shutdown

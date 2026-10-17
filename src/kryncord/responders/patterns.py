@@ -1,9 +1,14 @@
 """Padrão compilado — um `Padrao` casa um `custom_id` ou devolve `None`.
 
 O match é por segmento, com **backtracking**. É obrigatório, não
-elegante: `/a/?:x/b` casa o id `/a/b` só se o `?:x` aceitar casar zero
+elegante: `/a/{?x}/b` casa o id `/a/b` só se o `{?x}` aceitar casar zero
 segmentos e deixar `b` para o literal. Sem voltar atrás, a resposta
 seria "não casa" — e a rota mais natural deixaria de funcionar.
+
+O casar-um-segmento é o `Segmento.casa` (`0031`): literal compara
+igualdade, `{param}`/`{?param}`/segmento misto casam pelo regex do
+segmento. Params embutidos (`produto:{id}:comprar`) não mudam nada
+aqui — um segmento é um segmento, com o regex que seja.
 
 A recursão é segura no tamanho real: rota tem no máximo
 ``MAX_CUSTOM_ID / 2`` segmentos, e cada nível consome um segmento do
@@ -16,7 +21,6 @@ from __future__ import annotations
 from typing import Any
 
 from kryncord.responders.ids import (
-    LITERAL,
     OPCIONAL,
     WILDCARD,
     Segmento,
@@ -54,7 +58,7 @@ class Padrao:
     @property
     def nomes(self) -> tuple[str, ...]:
         """Nomes de parâmetro que este padrão extrai."""
-        return tuple(s.nome for s in self._segmentos if (s.e_param or s.tipo == WILDCARD))
+        return tuple(nome for s in self._segmentos for nome in s.nomes)
 
     def casa(self, custom_id: str) -> dict[str, str] | None:
         """Params crus se casa; `None` se não.
@@ -80,7 +84,7 @@ class Padrao:
 
         Peso por peso da esquerda para a direita (0013); quando um peso
         é prefixo do outro, o curto vence: ele termina sem wildcard, e
-        o longo só empataria o peso com `**`/`?:` — exatamente os que
+        o longo só empataria o peso com `**`/`{?x}` — exatamente os que
         casam "qualquer coisa".
         """
         for wx, wy in zip(self.pesos, other.pesos, strict=False):
@@ -114,12 +118,13 @@ def _casa(
 ) -> dict[str, str] | None:
     """Casa segmentos[i:] contra partes[j:], acumulando params.
 
-    - `literal` exige igualdade exata — `custom_id` é gerado por nós,
+    - `literal` exige igualdade exata — `custom_id` é gerido por nós,
       não digitado por humano, e case-folding seria trabalho sem
       cliente (0013);
-    - `:param` consome exatamente um;
-    - `?:param` tenta consumir um, e volta para zero se o resto não
-      fecha — o backtracking que faz `/a/?:x/b` casar `/a/b`;
+    - `{param}`/segmento misto consomem exatamente um, com os params
+      que o `Segmento.casa` extrair;
+    - `{?param}` tenta consumir um, e volta para zero se o resto não
+      fecha — o backtracking que faz `/a/{?x}/b` casar `/a/b`;
     - `**` consome todo o resto. Sem nome aceita zero (`params["_"]`
       é `""`); nomeado exige pelo menos um (0013).
     """
@@ -135,15 +140,12 @@ def _casa(
         params[seg.nome or "_"] = "/".join(resto)
         return params
 
-    if seg.tipo == LITERAL:
-        if j < len(partes) and partes[j] == seg.nome:
-            return _casa(segmentos, partes, i + 1, j + 1, params)
-        return None
-
     if j < len(partes):
-        com_um = _casa(segmentos, partes, i + 1, j + 1, {**params, seg.nome: partes[j]})
-        if com_um is not None:
-            return com_um
+        achado = seg.casa(partes[j])
+        if achado is not None:
+            com_um = _casa(segmentos, partes, i + 1, j + 1, {**params, **achado})
+            if com_um is not None:
+                return com_um
 
     if seg.tipo == OPCIONAL:
         # Casou zero: o param fica **ausente**, não vazio. Ausente é o
@@ -158,10 +160,17 @@ def _casa(
 def conflitam(a: Padrao, b: Padrao) -> bool:
     """Se dois padrões podem casar o **mesmo** id.
 
-    Regra da 0013: mesmo peso **e** nenhum segmento onde os dois são
-    literais diferentes. `/a/:x` e `/:y/b` têm o mesmo peso e casam
-    `/a/b` — conflito. `/a/:x` e `/b/:y` têm o mesmo peso e nunca casam
-    o mesmo id — não é conflito, são duas rotas.
+    Regra da 0013: mesmo peso **e** nenhum segmento onde os dois têm
+    literais diferentes. `/a/{x}` e `/{y}/b` têm pesos diferentes e
+    casam `/a/b` — não conflitam, a ordenação resolve. `/a/{x}` e
+    `/{y}` têm o mesmo peso e casam `/a` — conflito. `/a/{x}` e `/b/{y}`
+    têm o mesmo peso e nunca casam o mesmo id — não é conflito, são
+    duas rotas.
+
+    Segmento misto entra pela mesma porta: `produto:{id}:comprar` e
+    `produto:comprar` têm pesos diferentes (misto conta como param);
+    dois mistos de mesmo peso com os literais iguais casam o mesmo id e
+    conflitam; com literais diferentes, não.
 
     Chamado no registro, na importação — o único momento em que dá
     para citar os dois módulos e o usuário ainda está olhando.
@@ -169,7 +178,7 @@ def conflitam(a: Padrao, b: Padrao) -> bool:
     if a.pesos != b.pesos:
         return False
     for sa, sb in zip(a.segmentos, b.segmentos, strict=False):
-        if sa.tipo == LITERAL and sb.tipo == LITERAL and sa.nome != sb.nome:
+        if sa.literais and sb.literais and sa.literais != sb.literais:
             return False
     return True
 

@@ -1,21 +1,20 @@
 """`@event` — o registro de alto nível, com validação na importação.
 
-A diferença para `client.on` é o `EventContext` na frente dos
-argumentos, e é a única (`0020`): uma tabela (`EVENT_PAYLOADS`), dois
-caminhos, e a diferença é o contexto.
-
-Tudo que este módulo faz existe para que o erro apareça **na
-importação**. Aridade errada, evento que não existe, `ready` declarado
-duas vezes — são coisas que sem validação viram "handler que nunca roda,
-sem erro visível", que é o pior sintoma de diagnosticar. Com validação,
-viram um traceback apontando a linha do decorator.
+A diferença para `client.on` virou só a validação (`0031`): os dois
+caminhos entregam **o payload só**, um contrato para os dois. O que
+este módulo acrescenta é a checagem na importação — aridade, evento que
+não existe, `ready` declarado duas vezes. São coisas que sem validação
+viram "handler que nunca roda, sem erro visível", que é o pior sintoma
+de diagnosticar. Com validação, viram um traceback apontando a linha do
+decorator.
 
 ## A função original volta
 
 `@event` devolve a função, não a `EventEntry`. Trocar o objeto da
-função por um registro quebraria `functools.wraps`, `@staticmethod` acima
-do decorator, e qualquer teste que inspeciona a função — e não ganharia
-nada: a `EventEntry` vive no dispatcher, que é onde ela é usada.
+função por um registro quebraria `functools.wraps`, `@staticmethod`
+acima do decorator, e qualquer teste que inspeciona a função — e não
+ganharía nada: a `EventEntry` vive no dispatcher, que é onde ela é
+usada.
 
 ## Anotação é conferida com folga
 
@@ -92,7 +91,6 @@ def event(
             label=name if name is not None else str(getattr(fn, "__qualname__", repr(fn))),
             tags=tags,
             once=True if chave == "ready" else bool(once),
-            with_context=True,
         )
         return fn
 
@@ -144,11 +142,11 @@ def _valida_nome(chave: str, destino: EventDispatcher) -> None:
 def _valida_aridade(chave: str, fn: Handler) -> None:
     """Confere quantos argumentos o handler recebe, na importação.
 
-    Esperado é `1 + len(args)` — o `EventContext` na frente, que é o que
-    `@event` promete. Handler com `*args` pula a checagem (`K9`): quem
-    escreveu `*args` disse que não quer número nenhum.
+    Esperado é `len(args)` — o payload (`0031`), sem nada na frente.
+    Handler com `*args` pula a checagem (`K9`): quem escreveu `*args`
+    disse que não quer número nenhum.
     """
-    esperado = 1 + len(EVENT_PAYLOADS[chave])
+    esperado = len(EVENT_PAYLOADS[chave])
     if _tem_variadic(fn):
         return
     recebidos = len(
@@ -161,10 +159,9 @@ def _valida_aridade(chave: str, fn: Handler) -> None:
     if recebidos != esperado:
         raise EventDefinitionError(
             f"Handler de {chave!r} recebe {recebidos} argumento(s), e o "
-            f"evento entrega {esperado} (EventContext + "
-            f"{len(EVENT_PAYLOADS[chave])}): "
+            f"evento entrega {esperado}: "
             f"async def {getattr(fn, '__qualname__', 'handler')}("
-            f"ctx, {', '.join(f'a{i}' for i in range(len(EVENT_PAYLOADS[chave])))})"
+            f"{', '.join(f'a{i}' for i in range(esperado))})"
         )
 
 
@@ -191,9 +188,7 @@ def _valida_anotacoes(chave: str, fn: Handler) -> None:
         for p in inspect.signature(fn).parameters.values()
         if p.kind in (p.POSITIONAL_ONLY, p.POSITIONAL_OR_KEYWORD)
     ]
-    # O primeiro é o `ctx`, que não está na tabela — ele é o contexto,
-    # não um argumento do evento.
-    for indice, parametro in enumerate(parametros[1:]):
+    for indice, parametro in enumerate(parametros):
         if indice >= len(esperados):
             break
         declarado = hints.get(parametro.name)

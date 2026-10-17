@@ -9,22 +9,33 @@ O dono do estado é este contexto, e não o modelo `Interaction`: o
 modelo continua dado puro (`0003`), e o mesmo `Interaction` pode ser
 entregue a mais de um contexto durante um dispatch.
 
-    UNANSWERED ──reply──────────────> ANSWERED
-         │                              ▲
-         ├──defer/defer_update────> DEFERRED ──edit──────────────┘
+    UNANSWERED ──respond────────────> ANSWERED ──delete_original──> COMPLETED
+         │                              ▲  ▲
+         ├──defer/defer_update────> DEFERRED ┘  (edit_original_response)
          │                              │
          ├──update──────────────────────>│  (direto a ANSWERED)
          ├──launch_activity──────────────>│
-         └──send_modal────────────> MODAL   (terminal)
+         └──open_modal──────────────> MODAL_OPENED   (terminal de resposta)
+
+Qualquer estado → `EXPIRED` quando o token vence (15 minutos). A
+expiração **não** é um alarme: é uma pergunta sobre o snowflake, feita
+na hora da chamada (`0031`).
+
+Nomes da API pública (0031): `respond`, `edit_original_response`,
+`followup`, `open_modal`, `delete_original_response`,
+`fetch_original_response`. O handler não vê este objeto — ele vê a
+interação tipada (`interactions/base.py`), que delega para cá.
 """
 
 from __future__ import annotations
 
+import time
 from enum import IntEnum
 from typing import Any
 
 from kryncord.api.interactions import InteractionsAPI
-from kryncord.errors import InteractionStateError
+from kryncord.errors import InvalidInteractionState
+from kryncord.models.base import DISCORD_EPOCH_MS, snowflake_datetime
 from kryncord.models.interaction import Interaction
 
 
@@ -37,8 +48,12 @@ class InteractionState(IntEnum):
     """Defer enviado — comprou 15 minutos, mas ainda não respondeu."""
     ANSWERED = 2
     """Resposta final enviada. Edição continua possível."""
-    MODAL = 3
-    """Modal aberto — terminal. Não há follow-up de modal."""
+    MODAL_OPENED = 3
+    """Modal aberto — terminal. O envio do modal é uma interação nova."""
+    COMPLETED = 4
+    """Resposta original apagada — não há mais o que editar nela."""
+    EXPIRED = 5
+    """Token venceu (15 minutos). Nenhum callback funciona mais."""
 
     @property
     def responded(self) -> bool:
@@ -51,21 +66,42 @@ class InteractionState(IntEnum):
         return self is not InteractionState.UNANSWERED
 
 
+#: O token da interação vale 15 minutos. Depois disso o Discord
+#: recusa qualquer callback com 400 "Invalid interaction token" — e o
+#: 400 dele não distingue "expirou" de "fora de ordem".
+VALIDADE_TOKEN_MS = 15 * 60 * 1_000
+
+
+def _expirou(interaction: Interaction) -> bool:
+    """Se o token desta interação já venceu.
+
+    A idade vem do próprio snowflake — não há timer pendurado por
+    dispatch. Id sintético (`id=1`, `id=42`) não tem instante legível e
+    **nunca** expira: julgar a idade de um id que não é snowflake seria
+    inventar uma resposta para uma pergunta que o dado não faz.
+    """
+    criado = snowflake_datetime(interaction.id)
+    if criado.timestamp() * 1000 <= DISCORD_EPOCH_MS:
+        return False
+    return time.time() * 1000 > criado.timestamp() * 1000 + VALIDADE_TOKEN_MS
+
+
 #: Transições a partir de cada estado, por ação. O `_` é o resultado —
 #: `None` significa "erro", e o chamador levanta com contexto.
 _TRANSICOES: dict[InteractionState, dict[str, InteractionState | None]] = {
     InteractionState.UNANSWERED: {
-        "reply": InteractionState.ANSWERED,
+        "respond": InteractionState.ANSWERED,
         "defer": InteractionState.DEFERRED,
         "defer_update": InteractionState.DEFERRED,
         "update": InteractionState.ANSWERED,
-        "send_modal": InteractionState.MODAL,
+        "open_modal": InteractionState.MODAL_OPENED,
         "launch_activity": InteractionState.ANSWERED,
         "ack": InteractionState.DEFERRED,
     },
     InteractionState.DEFERRED: {
-        "edit": InteractionState.ANSWERED,
-        "send_modal": InteractionState.MODAL,
+        "edit_original_response": InteractionState.ANSWERED,
+        "delete_original_response": InteractionState.COMPLETED,
+        "open_modal": InteractionState.MODAL_OPENED,
         # `ack` de novo é no-op: o chamador queria garantir que foi
         # acknowledge, e garantir é garantir — reclamar seria dizer que
         # ele errou por ter atingido o objetivo.
@@ -73,22 +109,35 @@ _TRANSICOES: dict[InteractionState, dict[str, InteractionState | None]] = {
     },
     InteractionState.ANSWERED: {
         # Edição é idempotente: responder e editar é o fluxo normal.
-        "edit": InteractionState.ANSWERED,
+        "edit_original_response": InteractionState.ANSWERED,
+        "delete_original_response": InteractionState.COMPLETED,
         "ack": InteractionState.ANSWERED,
     },
-    InteractionState.MODAL: {
-        "ack": InteractionState.MODAL,
+    InteractionState.MODAL_OPENED: {
+        "ack": InteractionState.MODAL_OPENED,
     },
+    InteractionState.COMPLETED: {
+        # A resposta original foi apagada; follow-up ainda é possível
+        # (é outro webhook message), mas não há mais o que editar.
+        "ack": InteractionState.COMPLETED,
+    },
+    #: Expirado não transiciona para nada — é o fim do contrato.
+    InteractionState.EXPIRED: {},
 }
 
 
 class InteractionContext:
-    """Estado e respostas de uma interação.
+    """Estado e respostas de uma interação — o dono da máquina.
 
-    Um por dispatch. `reply`/`defer`/`edit` são delegação para o
-    `InteractionsAPI` — este objeto só decide **se pode** e **o que
-    mudou de estado**. Centralizar isso é o que torna a ordem testável
-    sem rede.
+    Um por dispatch. `respond`/`defer`/`edit_original_response` são
+    delegação para o `InteractionsAPI` — este objeto só decide **se
+    pode** e **o que mudou de estado**. Centralizar isso é o que torna
+    a ordem testável sem rede.
+
+    Este objeto é **interno** (`0031`): o handler recebe a interação
+    tipada (`BaseInteraction` e filhas), que delega para cá. Os nomes
+    dos métodos são os mesmos da API pública — dois vocabulários para a
+    mesma ação seria mais um lugar para divergir.
     """
 
     __slots__ = ("_api", "_emitidos", "_interaction", "_profundidade", "_state")
@@ -98,7 +147,7 @@ class InteractionContext:
         self._api = api
         self._state = InteractionState.UNANSWERED
         #: Guardas do `emit_responder` (ideia 09 §5). Vivem aqui, e não
-        #: no `ResponderContext`, porque aqui é o "um por dispatch" —
+        #: na interação tipada, porque aqui é o "um por dispatch" —
         #: um emit cria contexto novo, e perder a contagem seria deixar
         #: o loop voltar.
         self._emitidos: set[str] = set()
@@ -114,10 +163,23 @@ class InteractionContext:
 
     @property
     def state(self) -> InteractionState:
+        """Estado atual — `EXPIRED` quando o token já venceu.
+
+        A expiração é calculada aqui (snowflake + 15 minutos), não
+        guardada: ela não é um evento que acontece com o contexto
+        parado, é o resultado de perguntar "ainda dá tempo?".
+        """
+        if self._state is not InteractionState.EXPIRED and _expirou(self._interaction):
+            return InteractionState.EXPIRED
         return self._state
 
     def is_responded(self) -> bool:
-        """Se já houve qualquer resposta — defer inclusive."""
+        """Se já houve qualquer resposta — defer inclusive.
+
+        Pergunta sobre o que **aconteceu**, então lê o estado interno:
+        uma interação expirada depois de respondida continua tendo sido
+        respondida.
+        """
         return self._state.responded
 
     def is_deferred(self) -> bool:
@@ -125,6 +187,10 @@ class InteractionContext:
 
     def is_answered(self) -> bool:
         return self._state is InteractionState.ANSWERED
+
+    def is_expired(self) -> bool:
+        """Se o token venceu — aí nenhum callback funciona mais."""
+        return _expirou(self._interaction)
 
     @property
     def emitidos(self) -> set[str]:
@@ -144,18 +210,18 @@ class InteractionContext:
     # Resposta inicial
     # ------------------------------------------------------------------
 
-    async def reply(self, content: str | None = None, **kwargs: Any) -> None:
+    async def respond(self, content: str | None = None, **kwargs: Any) -> None:
         """Responde com mensagem, dentro dos 3 segundos.
 
         `ephemeral` é uma escolha única por interação — e não há um
         guarda separado para ela porque a máquina de estados já cobre:
-        repetir a chamada é `InteractionStateError` antes de qualquer
+        repetir a chamada é `InvalidInteractionState` antes de qualquer
         comparação de flag. Um segundo guarda seria código que nunca
         roda.
         """
-        self._exige("reply")
+        self._exige("respond")
         await self._api.respond(self._interaction, content, **kwargs)
-        self._state = _TRANSICOES[self._state]["reply"]  # type: ignore[assignment]
+        self._state = _TRANSICOES[self._state]["respond"]  # type: ignore[assignment]
 
     async def defer(self, *, ephemeral: bool = False) -> None:
         """Mostra "pensando…" e compra 15 minutos.
@@ -170,13 +236,13 @@ class InteractionContext:
         Descartá-las em silencioso era o comportamento antigo e é
         exatamente o que o `0023` baniu: o usuário pedia "só quem chamou
         vê" e não via. O caminho para pensando efêmero de botão é
-        `defer_update()` + `follow_up(ephemeral=True)`.
+        `defer_update()` + `followup(ephemeral=True)`.
         """
         if ephemeral and self._interaction.is_message_component():
             raise ValueError(
                 "defer(ephemeral=True) num componente não existe — DEFERRED_UPDATE_MESSAGE "
                 "não aceita flags, então a ephemeral seria descartada em silêncio. Use "
-                "defer_update() e depois follow_up(ephemeral=True)."
+                "defer_update() e depois followup(ephemeral=True)."
             )
         self._exige("defer")
         await self._api.defer(self._interaction, ephemeral=ephemeral)
@@ -191,7 +257,7 @@ class InteractionContext:
         a confirmar".
         """
         if not self._interaction.is_message_component():
-            raise InteractionStateError(
+            raise InvalidInteractionState(
                 "defer_update() só existe em interação de componente — em comando não há "
                 "mensagem a confirmar, e o equivalente é defer()"
             )
@@ -202,7 +268,7 @@ class InteractionContext:
     async def update(self, content: str | None = None, **kwargs: Any) -> None:
         """Substitui a mensagem que continha o componente.
 
-        Aceita vazio — diferente de `reply()`, que recusa payload sem
+        Aceita vazio — diferente de `respond()`, que recusa payload sem
         nada. Aqui "mantém como está" é uma resposta válida e é o ack de
         botão mais comum que existe; recusar obrigaria a mandar `content`
         fake só para o Discord não reclamar.
@@ -212,9 +278,9 @@ class InteractionContext:
         por uma mensagem nova não é o que `update` faz.
         """
         if not self._interaction.is_message_component():
-            raise InteractionStateError(
+            raise InvalidInteractionState(
                 "update() só existe em interação de componente — não há mensagem a "
-                "substituir num comando. Use reply() ou defer()."
+                "substituir num comando. Use respond() ou defer()."
             )
         self._exige("update")
         await self._api.update_message(self._interaction, content, **kwargs)
@@ -227,12 +293,13 @@ class InteractionContext:
         estados é no-op. Reclamar que já foi respondido seria dizer que
         o chamador errou por ter atingido o objetivo.
         """
+        self._exige("ack")
         destino = _TRANSICOES[self._state]["ack"]
         if destino is self._state:
             return
         await self.defer()
 
-    async def send_modal(self, modal: Any) -> None:
+    async def open_modal(self, modal: Any) -> None:
         """Abre um modal — **terminal**.
 
         Permitido a partir de `UNANSWERED` e `DEFERRED`: o Discord
@@ -240,15 +307,16 @@ class InteractionContext:
         A partir de `ANSWERED` é erro — já existe mensagem na tela, e
         um modal em cima dela não tem como ser editado depois.
         """
-        self._exige("send_modal")
+        self._exige("open_modal")
         await self._api.show_modal(self._interaction, modal)
-        self._state = _TRANSICOES[self._state]["send_modal"]  # type: ignore[assignment]
+        self._state = _TRANSICOES[self._state]["open_modal"]  # type: ignore[assignment]
 
     async def launch_activity(self) -> None:
         """Abre a atividade do app no canal da interação.
 
         Resposta inicial como outra qualquer — depois dela, a máquina
-        está em `ANSWERED` e só `edit`/`delete`/`follow_up` restam.
+        está em `ANSWERED` e só `edit_original_response`/
+        `delete_original_response`/`followup` restam.
 
         Exige atividade habilitada no Developer Portal; sem ela, o
         `callback` é aceito e nada acontece. O método existe porque é
@@ -264,7 +332,7 @@ class InteractionContext:
     # Depois da resposta
     # ------------------------------------------------------------------
 
-    async def edit(
+    async def edit_original_response(
         self,
         content: str | None = None,
         *,
@@ -279,8 +347,12 @@ class InteractionContext:
         `message_id` alcança um follow-up; `@original` é o que quase
         todo código quer, e é o default porque errar o alvo é mais
         caro que digitar de menos.
+
+        **Mensagem de origem ≠ resposta original** (`docs/interaction-
+        response-methods.md` §1): editar a mensagem que tinha o botão
+        clicado é outra operação — `client.api.messages.edit_message`.
         """
-        self._exige("edit")
+        self._exige("edit_original_response")
         await self._api.edit_message(
             self._interaction.application_id,
             self._interaction.token,
@@ -288,16 +360,21 @@ class InteractionContext:
             content,
             **kwargs,
         )
-        self._state = _TRANSICOES[self._state]["edit"]  # type: ignore[assignment]
+        self._state = _TRANSICOES[self._state]["edit_original_response"]  # type: ignore[assignment]
 
-    async def delete(self, *, message_id: str | int = "@original") -> None:
-        """Apaga uma mensagem desta interação. Padrão: a original."""
-        self._exige("edit")
+    async def delete_original_response(self, *, message_id: str | int = "@original") -> None:
+        """Apaga uma mensagem desta interação. Padrão: a original.
+
+        Da `DEFERRED` e da `ANSWERED` — e aí a máquina vai para
+        `COMPLETED`: não há mais o que editar na original, só follow-up.
+        """
+        self._exige("delete_original_response")
         await self._api.delete_message(
             self._interaction.application_id, self._interaction.token, message_id
         )
+        self._state = _TRANSICOES[self._state]["delete_original_response"]  # type: ignore[assignment]
 
-    async def fetch_reply(self, *, message_id: str | int = "@original") -> Any:
+    async def fetch_original_response(self, *, message_id: str | int = "@original") -> Any:
         """Busca uma mensagem desta interação. Padrão: a original.
 
         `None` quando ainda não existe — um defer nunca editado é um
@@ -308,16 +385,24 @@ class InteractionContext:
             self._interaction.application_id, self._interaction.token, message_id
         )
 
-    async def follow_up(self, content: str | None = None, **kwargs: Any) -> Any:
+    async def followup(self, content: str | None = None, **kwargs: Any) -> Any:
         """Envia uma mensagem adicional — não é a resposta inicial.
 
         Disponível de qualquer estado, inclusive `UNANSWERED`? **Não**:
         o Discord recusa follow-up antes da resposta inicial, porque o
         follow-up referencia a resposta original.
+
+        Depois de `delete_original_response` continua valendo: o
+        follow-up é outro webhook message, não a resposta original.
         """
+        if self.state is InteractionState.EXPIRED:
+            raise InvalidInteractionState(
+                "followup() com o token expirado — o token da interação vale 15 "
+                "minutos, e este já venceu"
+            )
         if self._state is InteractionState.UNANSWERED:
-            raise InteractionStateError(
-                "follow_up() antes da resposta inicial — o follow-up referencia a "
+            raise InvalidInteractionState(
+                "followup() antes da resposta inicial — o follow-up referencia a "
                 "resposta original, que ainda não existe. Responda ou defera primeiro."
             )
         return await self._api.followup(
@@ -338,17 +423,35 @@ class InteractionContext:
         "inválido" obriga a ler a máquina inteira. `UNANSWERED` precisa
         da sua entrada: sem ela, a própria mensagem de erro virava um
         `KeyError`, mascarando o problema real.
+
+        A expiração vem primeiro: com o token vencido, a pergunta não é
+        "que ordem era", é "já não há ordem nenhuma".
         """
-        if _TRANSICOES[self._state].get(acao) is not None:
+        atual = self.state
+        if atual is InteractionState.EXPIRED:
+            raise InvalidInteractionState(
+                f"{acao}() com o token expirado — o token da interação vale 15 "
+                "minutos, e este já venceu. Nenhum callback funciona mais."
+            )
+        if _TRANSICOES[atual].get(acao) is not None:
             return
 
         sae = {
             InteractionState.UNANSWERED: (
-                "ainda não houve resposta — use reply() ou defer() antes"
+                "ainda não houve resposta — use respond() ou defer() antes"
             ),
-            InteractionState.ANSWERED: "responda com edit() ou delete(), ou use follow_up()",
-            InteractionState.DEFERRED: "finalize com edit(), ou use follow_up()",
-            InteractionState.MODAL: "um modal é terminal — não há mais resposta nesta interação",
-        }[self._state]
+            InteractionState.ANSWERED: (
+                "responda com edit_original_response() ou delete_original_response(), "
+                "ou use followup()"
+            ),
+            InteractionState.DEFERRED: "finalize com edit_original_response(), ou use followup()",
+            InteractionState.MODAL_OPENED: (
+                "um modal é terminal — o envio é uma interação nova (@modal_submit); "
+                "esta aqui não tem mais resposta"
+            ),
+            InteractionState.COMPLETED: (
+                "a resposta original foi apagada — só followup() segue funcionando"
+            ),
+        }[atual]
 
-        raise InteractionStateError(f"{acao}() não é permitido depois de {self._state.name}; {sae}")
+        raise InvalidInteractionState(f"{acao}() não é permitido depois de {atual.name}; {sae}")

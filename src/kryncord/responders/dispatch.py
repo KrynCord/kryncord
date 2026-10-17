@@ -6,6 +6,12 @@ que chama ``block()`` para tudo — inclusive o `on_not_found` (0017
 decidiu; a ideia 11 §"regra importante" dizia o contrário e foi
 sobrescrita).
 
+O objeto entregue ao handler é a **interação tipada** (`0031`): a
+classe vem do tipo da interação que chegou — `ButtonInteraction` para
+clique, `ModalSubmitInteraction` para envio de modal, e assim por
+diante (`classe_para`). Nunca da anotação: entrega que depende de
+anotação seria entrega que muda se alguém corrigir um typo.
+
 `emit_responder` é o mesmo caminho, sem gateway: roteador (0013 — sem
 lookup exato paralelo), com dois guardas da ideia 09 — profundidade e
 re-emissão.
@@ -21,11 +27,11 @@ from typing import Any
 
 from kryncord.enums import ResponderType
 from kryncord.errors import BlockHandlers, DispatchError
+from kryncord.interactions.components import ComponentInteraction, classe_para
 from kryncord.interactions.response import InteractionContext
 from kryncord.internal.compose import block, compose
 from kryncord.logging import get_logger
 from kryncord.models.interaction import Interaction
-from kryncord.responders.context import ResponderContext
 from kryncord.responders.converters import converte, plano_de, recebe_params_dict
 from kryncord.responders.params import Params
 
@@ -128,17 +134,18 @@ async def dispatch_responder(
             # O mesmo `state` do handler que não existiu: middleware que
             # rodou antes já pode ter escrito nele, e o `on_not_found`
             # tem que enxergar o que a cadeia anterior deixou (`0026` §D6).
-            ctx = ResponderContext(
+            # Sem rota não há params — a superfície comum é o contrato.
+            inter = ComponentInteraction(
                 interaction_ctx,
                 client=client,
                 tasks=tasks,
                 esperas=esperas,
                 state=state,
             )
-            await _chama(on_not_found, ctx)
+            await _chama(on_not_found, inter)
         return False
 
-    ctx = ResponderContext(
+    inter = classe_para(tipo)(
         interaction_ctx,
         params=achado.params,
         client=client,
@@ -146,17 +153,17 @@ async def dispatch_responder(
         esperas=esperas,
         state=state,
     )
-    cademia = (*middleware, *achado.entrada.middleware)
+    cadeia = (*middleware, *achado.entrada.middleware)
 
     try:
-        for m in cademia:
-            await m(ctx, block)
-        resultado = await _invoca(achado.entrada.handler, achado.entrada, ctx, achado.params)
+        for m in cadeia:
+            await m(inter, block)
+        resultado = await _invoca(achado.entrada.handler, achado.entrada, inter, achado.params)
     except BlockHandlers:
         #: Middleware respondeu e parou — o clique foi atendido.
         return True
     except Exception as exc:
-        await _erro(exc, ctx, on_error)
+        await _erro(exc, inter, on_error)
         return True
 
     if esperas is not None:
@@ -166,7 +173,7 @@ async def dispatch_responder(
 
 async def emit_responder(
     custom_id: str,
-    ctx: ResponderContext,
+    inter: ComponentInteraction,
     *,
     registry: Any = None,
     params: Mapping[str, str] | None = None,
@@ -183,14 +190,14 @@ async def emit_responder(
     - **re-emissão**: o mesmo `custom_id` na mesma interação, a menos
       que `force=True`. Re-emitir sem querer é loop à primeira vista;
     - **profundidade**: mais de `MAX_PROFUNDIDADE` aninhados é loop de
-      verdade, e o `force=True` não abre — abrir seria o próprio loop.
+      verdade, e o `force=True` não abrir — abrir seria o próprio loop.
 
     Não chama `on_not_found`: chamada programática não é "isso não foi
     configurado ainda", e mostrar aviso de usuário final por id que
     veio do nosso código é expor erro que não é erro (K10).
     """
     reg = registry if registry is not None else _registry_global()
-    dono = ctx.interaction_context
+    dono = inter.interaction_context
 
     if not force and custom_id in dono.emitidos:
         raise DispatchError(
@@ -198,9 +205,11 @@ async def emit_responder(
             f"loop. Se quer rodar de novo de propósito, use force=True."
         )
 
-    tipo = _tipo_de(ctx.interaction)
+    tipo = _tipo_de(inter.interaction)
     achado = reg.match(custom_id, tipo) if tipo is not None else None
-    if achado is None:
+    if tipo is None or achado is None:
+        # `tipo is None` já faz `achado` ser `None` — os dois juntos no
+        # mesmo guard é o que deixa `tipo` estreito para `classe_para`.
         _log.debug("emit_responder: ninguém atende %r", custom_id)
         return False
 
@@ -215,12 +224,12 @@ async def emit_responder(
         )
 
     _log.debug("emit_responder: %s (origem: código)", custom_id)
-    novo = ResponderContext(
-        ctx.interaction_context,
+    novo = classe_para(tipo)(
+        dono,
         params=params if params is not None else achado.params,
-        client=ctx.client,
-        tasks=ctx._tasks,
-        esperas=ctx._esperas,
+        client=inter.client,
+        tasks=inter.tasks,
+        esperas=inter.esperas,
     )
     try:
         for m in achado.entrada.middleware:
@@ -267,20 +276,20 @@ def _cache_permite(politica: str, interaction: Interaction, client: Any) -> bool
 async def _invoca(
     handler: Callable[..., Any],
     entrada: Any,
-    ctx: ResponderContext,
+    inter: ComponentInteraction,
     raw: Mapping[str, str],
 ) -> Any:
     """Chama o handler com params convertidos, na forma que ele pediu.
 
     Três formas, uma chamada:
 
-    - ``fn(ctx, *args)`` — recebe só o contexto (K9);
-    - ``fn(ctx, params)`` — o dict cru;
-    - ``fn(ctx, a: T, b: U)`` — convertidos pela anotação, com `parse=`
-      vencendo por cima (0014).
+    - ``fn(interaction)`` — recebe só a interação (K9);
+    - ``fn(interaction, params)`` — o dict cru;
+    - ``fn(interaction, a: T, b: U)`` — convertidos pela anotação, com
+      `parse=` vencendo por cima (0014).
     """
     if recebe_params_dict(handler, entrada.rota):
-        return await _chama(handler, ctx, params=Params(raw))
+        return await _chama(handler, inter, params=Params(raw))
 
     kwargs: dict[str, Any] = {}
     for nome, conversor, _opcional, tem_default in plano_de(handler, entrada.rota):
@@ -288,14 +297,14 @@ async def _invoca(
             if tem_default:
                 continue
             #: Sem default e sem valor: o param era opcional na rota
-            #: (`?:`) e o segmento não veio. `None` é o que a anotação
-            #: `T | None` promete.
+            #: (`{?...}`) e o segmento não veio. `None` é o que a
+            #: anotação `T | None` promete.
             kwargs[nome] = None
             continue
-        kwargs[nome] = await converte(conversor, raw[nome], ctx, nome)
+        kwargs[nome] = await converte(conversor, raw[nome], inter, nome)
 
     if entrada.parse is not None:
-        transformado = entrada.parse(raw, ctx)
+        transformado = entrada.parse(raw, inter)
         if inspect.iscoroutine(transformado):
             transformado = await transformado
         if isinstance(transformado, Mapping):
@@ -303,30 +312,30 @@ async def _invoca(
             #: fica convertido como estava (0014).
             kwargs.update(transformado)
 
-    return await _chama(handler, ctx, **kwargs)
+    return await _chama(handler, inter, **kwargs)
 
 
-async def _chama(fn: Callable[..., Any], ctx: ResponderContext, **kwargs: Any) -> Any:
+async def _chama(fn: Callable[..., Any], inter: ComponentInteraction, **kwargs: Any) -> Any:
     if not inspect.iscoroutinefunction(fn):
         raise DispatchError(
             f"handler {getattr(fn, '__name__', fn)!r} não é async — handler de "
             f"responder sempre é; o que ele chama pode bloquear a rede inteira"
         )
-    return await fn(ctx, **kwargs)
+    return await fn(inter, **kwargs)
 
 
-async def _erro(exc: BaseException, ctx: ResponderContext, on_error: Any) -> None:
+async def _erro(exc: BaseException, inter: ComponentInteraction, on_error: Any) -> None:
     """`on_error` decide; o default loga e responde efêmera (0017)."""
     if on_error is not None:
-        await on_error(ctx, exc)
+        await on_error(inter, exc)
         return
 
-    _log.exception("responder falhou em %r: %r", ctx.custom_id, exc)
-    if not ctx.is_responded():
+    _log.exception("responder falhou em %r: %r", inter.custom_id, exc)
+    if not inter.is_responded():
         #: A resposta pode falhar porque o token já era (15 min) — o log
         #: acima já levou o erro real; a resposta é cortesia, não contrato.
         with suppress(Exception):
-            await ctx.reply(
+            await inter.respond(
                 "Algo deu errado ao processar isso — tente novamente mais tarde.",
                 ephemeral=True,
             )

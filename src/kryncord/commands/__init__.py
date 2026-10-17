@@ -18,12 +18,11 @@ A separação de papéis:
 
 from kryncord.commands.autocomplete import (
     MAX_ESCOLHAS,
-    AutocompleteContext,
+    AutocompleteInteraction,
     dispatch_autocomplete,
     foco_de,
     normalize_choices,
 )
-from kryncord.commands.context import CommandContext, OptionsAccessor
 from kryncord.commands.decorators import command, create_command
 from kryncord.commands.definition import CommandDefinition, CommandScope
 from kryncord.commands.dispatch import dispatch_application_command, instancia_de
@@ -32,11 +31,11 @@ from kryncord.commands.option import Option, OptionType, choice
 from kryncord.commands.registry import CommandKey, CommandRegistry
 from kryncord.commands.sync import CommandSync, SyncAction, SyncReport
 from kryncord.commands.validation import validate_definition
+from kryncord.interactions.commands import OptionsAccessor
 
 __all__ = [
     "MAX_ESCOLHAS",
-    "AutocompleteContext",
-    "CommandContext",
+    "AutocompleteInteraction",
     "CommandDefinition",
     "CommandInstance",
     "CommandKey",

@@ -37,8 +37,6 @@ from kryncord.cache import (
 )
 from kryncord.client import Client
 from kryncord.commands import (
-    AutocompleteContext,
-    CommandContext,
     CommandDefinition,
     CommandInstance,
     CommandRegistry,
@@ -116,18 +114,37 @@ from kryncord.errors import (
     DispatchError,
     EventDefinitionError,
     GatewayError,
+    HandlerSignatureError,
     HTTPError,
-    InteractionStateError,
     InteractionTimeoutError,
+    InvalidInteractionState,
     KrynCordError,
     LifecycleError,
     RateLimitError,
     ResponderDefinitionError,
     SessionInvalidError,
 )
-from kryncord.events import EventContext, EventName, event, normalize_event_name
+from kryncord.events import EventName, event, normalize_event_name
 from kryncord.intents import Intents
-from kryncord.interactions import InteractionContext, InteractionState, ModalFields
+from kryncord.interactions import (
+    AutocompleteInteraction,
+    BaseInteraction,
+    ButtonInteraction,
+    ChannelSelectInteraction,
+    CommandInteraction,
+    ComponentInteraction,
+    EntryPointInteraction,
+    InteractionContext,
+    InteractionState,
+    MentionableSelectInteraction,
+    MessageCommandInteraction,
+    ModalFields,
+    ModalSubmitInteraction,
+    RoleSelectInteraction,
+    StringSelectInteraction,
+    UserCommandInteraction,
+    UserSelectInteraction,
+)
 from kryncord.lifecycle import Lifecycle
 from kryncord.logging import get_logger, redact, setup_logging
 from kryncord.models import (
@@ -155,16 +172,22 @@ from kryncord.responders import (
     Match,
     Padrao,
     Params,
-    ResponderContext,
     ResponderEntry,
     ResponderRegistry,
     block,
     build_custom_id,
+    button,
+    channel_select,
     compose,
     emit_responder,
+    mentionable_select,
+    modal_submit,
     parse_rota,
     registrar_conversor,
     responder,
+    role_select,
+    string_select,
+    user_select,
 )
 from kryncord.state import ConnectionState, GuildState
 from kryncord.version import __version__
@@ -207,7 +230,6 @@ __all__ = [  # noqa: RUF022
     "parse_permissions_list",
     # eventos
     "EventName",
-    "EventContext",
     "event",
     "normalize_event_name",
     # cache e estado local
@@ -242,6 +264,7 @@ __all__ = [  # noqa: RUF022
     "CommandDefinitionError",
     "ResponderDefinitionError",
     "EventDefinitionError",
+    "HandlerSignatureError",
     "HTTPError",
     "RateLimitError",
     "DiscordAPIError",
@@ -253,10 +276,9 @@ __all__ = [  # noqa: RUF022
     "BlockHandlers",
     "ConversionError",
     "ComponentError",
-    "InteractionStateError",
+    "InvalidInteractionState",
     "InteractionTimeoutError",
     # comandos — 0011, 0022
-    "CommandContext",
     "CommandDefinition",
     "CommandInstance",
     "CommandRegistry",
@@ -264,15 +286,28 @@ __all__ = [  # noqa: RUF022
     "Option",
     "OptionType",
     "OptionsAccessor",
-    "AutocompleteContext",
     "choice",
     "command",
     "create_command",
     "validate_definition",
-    # interação — 0016
+    # interação — 0016, 0031
+    "AutocompleteInteraction",
+    "BaseInteraction",
+    "ButtonInteraction",
+    "ChannelSelectInteraction",
+    "CommandInteraction",
+    "ComponentInteraction",
+    "EntryPointInteraction",
     "InteractionContext",
     "InteractionState",
+    "MentionableSelectInteraction",
+    "MessageCommandInteraction",
     "ModalFields",
+    "ModalSubmitInteraction",
+    "RoleSelectInteraction",
+    "StringSelectInteraction",
+    "UserCommandInteraction",
+    "UserSelectInteraction",
     # componentes — 0015, 0024
     "ActionRow",
     "Button",
@@ -313,23 +348,29 @@ __all__ = [  # noqa: RUF022
     "EmbedField",
     "EmbedFooter",
     "EmbedImage",
-    # responders — 0013, 0014, 0023
+    # responders — 0013, 0014, 0023, 0031
     "ResponderType",
     "ComponentType",
     "Esperas",
     "Match",
     "Padrao",
     "Params",
-    "ResponderContext",
     "ResponderEntry",
     "ResponderRegistry",
     "block",
     "compose",
     "build_custom_id",
+    "button",
+    "channel_select",
     "emit_responder",
+    "mentionable_select",
+    "modal_submit",
     "parse_rota",
     "registrar_conversor",
     "responder",
+    "role_select",
+    "string_select",
+    "user_select",
     # registry global — K12
     "Registry",
     "registry",

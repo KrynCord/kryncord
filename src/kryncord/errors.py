@@ -48,6 +48,21 @@ class EventDefinitionError(DefinitionError):
     """Definição de handler de evento inválida."""
 
 
+class HandlerSignatureError(DefinitionError):
+    """A assinatura do handler não bate com o tipo de interação.
+
+    `@command` e os decorators de componente entregam uma classe
+    determinística — `CommandInteraction` para `/ping`, `ButtonInteraction`
+    para um clique (`0031`). O primeiro parâmetro anotado tem que ser
+    essa classe (ou uma filha); anotar outro tipo é erro **na
+    importação**, porque no clique a anotação mentira e o handler leria
+    um atributo que não existe.
+
+    Fora da hierarquia de `DefinitionError`? Não — é erro de definição,
+    detectado no registro, e `except DefinitionError` tem que pegá-lo.
+    """
+
+
 # --------------------------------------------------------------------------
 # REST
 # --------------------------------------------------------------------------
@@ -212,12 +227,13 @@ class ComponentError(KrynCordError):
     """
 
 
-class InteractionStateError(KrynCordError):
+class InvalidInteractionState(KrynCordError):
     """Transição inválida na máquina de estados da resposta.
 
     Não é `DispatchError`: o despacho funcionou, é o código que chamou
-    `reply()` depois de já ter respondido. Escapa do `on_error` de
-    propósito — é um bug de uso, não uma falha a ser tratada.
+    `respond()` depois de já ter respondido — ou com o token já
+    expirado. Escapa do `on_error` de propósito — é um bug de uso, não
+    uma falha a ser tratada.
     """
 
 

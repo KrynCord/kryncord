@@ -82,7 +82,6 @@ async def dispatch_interaction(
             registry=registry.commands,
             client=client,
             state=state,
-            cache=cache,
             middleware=_cadeia(command_options),
             on_error=_get(command_options, "on_error"),
             on_not_found=_get(command_options, "on_not_found"),

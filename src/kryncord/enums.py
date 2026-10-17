@@ -85,6 +85,8 @@ class ApplicationCommandType(IntEnum):
     CHAT_INPUT = 1
     USER = 2
     MESSAGE = 3
+    #: Inicializa uma Activity — semântica própria, não é slash.
+    PRIMARY_ENTRY_POINT = 4
 
 
 class ComponentType(IntEnum):

@@ -257,11 +257,11 @@ class Client:
         handler não pode derrubar a conexão que está mantendo o bot no
         ar.
 
-        O caminho de baixo nível. O de alto nível é `@event`, que
-        recebe `EventContext` na frente dos argumentos, aceita `tags` e
-        `once`, e **valida a aridade na importação** (`0025` §3). Aqui a
-        checagem é em runtime, porque `client.on` é o caminho antigo e
-        mudar a regra dele quebraria o que já funciona.
+        O caminho de baixo nível. O de alto nível é `@event`, que aceita
+        `tags` e `once`, e **valida a aridade na importação** (`0025`
+        §3). Os dois entregam o payload só (`0031`); aqui a checagem é
+        em runtime, porque `client.on` é o caminho antigo e mudar a
+        regra dele quebraria o que já funciona.
         """
 
         def decorator(handler: EventHandler) -> EventHandler:
@@ -306,11 +306,20 @@ class Client:
         muda no meio do uso derruba o bot inteiro sem avisar. Preenche
         só se estiver vazio: um token já configurado não é substituído
         por acidente quando `run()` é chamado sem querer de outro lugar.
+
+        Ctrl+C encerra **sem traceback**: o `Runner` cancela a tarefa
+        principal, o `async with` de `_espera_fechamento` roda o
+        shutdown completo nesse cancelamento e só depois o
+        `KeyboardInterrupt` sobe daqui — ele é engolido, e o `run()`
+        devolve normalmente.
         """
         if not self._config.token:
             self._config = replace(self._config, token=token)
         try:
             asyncio.run(self._espera_fechamento())
+        except KeyboardInterrupt:
+            log.info("Interrompido (Ctrl+C) — encerrando.")
+            return
         except RuntimeError as exc:
             if "running event loop" not in str(exc):
                 raise

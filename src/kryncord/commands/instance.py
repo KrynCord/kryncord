@@ -24,6 +24,9 @@ from kryncord.commands.definition import CommandDefinition
 from kryncord.commands.option import Option
 from kryncord.enums import ApplicationCommandType
 from kryncord.errors import CommandDefinitionError
+from kryncord.interactions.autocomplete import AutocompleteInteraction
+from kryncord.interactions.commands import CommandInteraction, classe_de_comando
+from kryncord.internal.signatures import valida_interacao
 
 #: Handler aceito pelo decorator. `*args` é permitido (`K9`); a
 #: sincronicidade é que é obrigatória, e é checada no registro.
@@ -181,10 +184,10 @@ class CommandInstance:
 
         ```python
         @command_instance()
-        async def run(ctx): ...
+        async def run(interaction): ...
 
         @command_instance
-        async def run(ctx): ...
+        async def run(interaction): ...
         ```
 
         `fn=None` é o caso dos parênteses vazios — o decorator chega
@@ -195,6 +198,11 @@ class CommandInstance:
 
         def decorador(alvo: Handler) -> Handler:
             _exige_assincrono(alvo, f"handler do comando {self.name!r}")
+            valida_interacao(
+                alvo,
+                classe_de_comando(self._definition.type),
+                f"handler do comando {self.name!r}",
+            )
             self._handler = alvo
             self._rebuild()
             return alvo
@@ -203,14 +211,14 @@ class CommandInstance:
             return decorador
         return decorador(fn)
 
-    async def run(self, ctx: Any, valor: Any = None) -> Any:
+    async def run(self, interaction: Any, valor: Any = None) -> Any:
         """Executa **este nível** e devolve o valor (`0022`).
 
         A raiz não recebe valor de ninguém — é o começo da cadeia. Por
-        isso `run(ctx)` chama o handler com `ctx` só, mesmo quando a
-        assinatura dele declara dois parâmetros: um parâmetro que a
-        cadeia nunca preenche é erro de declaração, e o `TypeError` do
-        `await` aponta exatamente para ele.
+        isso `run(interaction)` chama o handler com a interação só,
+        mesmo quando a assinatura dele declara dois parâmetros: um
+        parâmetro que a cadeia nunca preenche é erro de declaração, e o
+        `TypeError` do `await` aponta exatamente para ele.
 
         `valor` existe para compatibilidade de quem chama o nível de
         forma uniforme; na raiz ele é ignorado, e é **isso** que
@@ -218,7 +226,7 @@ class CommandInstance:
         """
         if self._handler is None:
             return None
-        return await self._handler(ctx)
+        return await self._handler(interaction)
 
     # ------------------------------------------------------------------
     # Encadeamento declarativo
@@ -229,6 +237,7 @@ class CommandInstance:
         self._require_chat_input("sub")
         if name in self._subcommands:
             raise CommandDefinitionError(f"comando {self.name!r}: subcomando {name!r} duplicado")
+        valida_interacao(handler, CommandInteraction, f"subcomando {name!r} de {self.name!r}")
         self._subcommands[name] = handler
         self._rebuild()
         return self
@@ -238,7 +247,7 @@ class CommandInstance:
 
         ```python
         @command("papel")
-        async def _(ctx): ...
+        async def _(interaction): ...
 
         _.group("papel", add=adicionar, remove=remover)
         ```
@@ -254,6 +263,8 @@ class CommandInstance:
         if name in self._groups:
             raise CommandDefinitionError(f"comando {self.name!r}: grupo {name!r} repetido")
 
+        for sub, handler in subs.items():
+            valida_interacao(handler, CommandInteraction, f"subcomando {sub!r} de {self.name!r}")
         self._groups[name] = dict(subs)
         self._grupo_descricoes[name] = description
         self._rebuild()
@@ -273,6 +284,11 @@ class CommandInstance:
                 raise CommandDefinitionError(
                     f"comando {self.name!r}: autocomplete para {option_name!r} já registrado"
                 )
+            valida_interacao(
+                fn,
+                AutocompleteInteraction,
+                f"autocomplete {option_name!r} de {self.name!r}",
+            )
             self._autocomplete[option_name] = fn
             return fn
 
@@ -300,6 +316,7 @@ class CommandInstance:
             raise CommandDefinitionError(
                 f"comando {self.name!r}: subcomando {name!r} duplicado no grupo {grupo!r}"
             )
+        valida_interacao(handler, CommandInteraction, f"subcomando {name!r} de {self.name!r}")
         subs[name] = handler
         self._rebuild()
 
@@ -381,6 +398,7 @@ class _Grupo:
         registro, e o grupo é um só por nome, porque o Discord tem um.
         """
         _exige_assincrono(fn, f"handler do grupo {self._nome!r}")
+        valida_interacao(fn, CommandInteraction, f"handler do grupo {self._nome!r}")
         if self._nome in self._instancia._grupo_handlers:
             raise CommandDefinitionError(
                 f"comando {self._instancia.name!r}: grupo {self._nome!r} já "
@@ -395,12 +413,12 @@ class _Grupo:
         """`@grupo` — registra o handler do grupo (ideia 04 §4)."""
         return self.handler(fn)
 
-    async def run(self, ctx: Any, valor: Any = None) -> Any:
+    async def run(self, interaction: Any, valor: Any = None) -> Any:
         """Executa **este nível** injetando o valor do nível acima.
 
-        É o meio da cadeia `command.run(ctx) -> grupo.run(ctx, valor) ->
-        sub.run(ctx, valor)` (`0022`). Sem handler registrado devolve o
-        valor recebido — o grupo que existe só para organizar a árvore
+        É o meio da cadeia `command.run(inter) -> grupo.run(inter, valor)
+        -> sub.run(inter, valor)` (`0022`). Sem handler registrado devolve
+        o valor recebido — o grupo que existe só para organizar a árvore
         não pode ser o lugar onde o dado morre.
 
         A injeção passa pelo mesmo `_injeta` do despacho, por import
@@ -414,7 +432,7 @@ class _Grupo:
 
         from kryncord.commands.dispatch import _injeta
 
-        return await _injeta(handler, ctx, valor, f"grupo {self._nome!r}")
+        return await _injeta(handler, interaction, valor, f"grupo {self._nome!r}")
 
 
 def _exige_assincrono(fn: Any, onde: str) -> None:

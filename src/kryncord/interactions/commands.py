@@ -1,18 +1,13 @@
-"""Contexto entregue ao handler de um comando.
+"""Comandos de aplicação tipados — `CommandInteraction` e parentes.
 
-`CommandContext` **compõe**, não herda. O `InteractionContext` é o dono
-de responder; este objeto é o dono dos campos do comando. A separação
-existe porque os dois mudam por ritmos diferentes — o estado da resposta
-muda a cada chamada, os campos do comando nunca mudam depois do
-dispatch.
+`CommandInteraction` é o handler de `/comando`. Menus de contexto têm
+a própria classe porque têm o próprio **alvo**: `UserCommandInteraction`
+expõe `target_user`, `MessageCommandInteraction` expõe
+`target_message`. Fingir que os três são o mesmo objeto (como faz um
+payload genérico) obriga todo handler a checar qual é.
 
-`ctx.reply(...)` é delegação, não reimplementação: um só
-`InteractionContext` por dispatch significa que `ctx.reply()` e
-`ctx.interaction` nunca discordam sobre o que já foi respondido.
-
-`ctx.options` é um accessor tipado, não um dict — porque quem escreve
-`ctx.options.get_int("pontos")` quer o erro na linha, não um `None`
-silencioso quando o campo não existe.
+`EntryPointInteraction` cobre `PRIMARY_ENTRY_POINT` — inicialização de
+Activity, sem alvo e sem opções.
 """
 
 from __future__ import annotations
@@ -20,10 +15,10 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any, cast
 
-from kryncord.interactions.response import InteractionContext, InteractionState
+from kryncord.enums import ApplicationCommandType
+from kryncord.interactions.base import BaseInteraction
 from kryncord.models.attachment import Attachment
 from kryncord.models.channel import Channel
-from kryncord.models.guild import Guild
 from kryncord.models.interaction import Interaction
 from kryncord.models.member import Member
 from kryncord.models.message import Message
@@ -31,213 +26,85 @@ from kryncord.models.role import Role
 from kryncord.models.user import User
 
 
-class CommandContext:
-    """Contexto de execução de um comando."""
+class CommandInteraction(BaseInteraction):
+    """Um comando de aplicação (CHAT_INPUT) sendo executado."""
 
-    __slots__ = (
-        "_args",
-        "_channel",
-        "_client",
-        "_guild",
-        "_interaction_ctx",
-        "_member",
-        "_state",
-        "_user",
-    )
-
-    def __init__(
-        self,
-        interaction_ctx: InteractionContext,
-        *,
-        guild: Guild | None = None,
-        channel: Channel | None = None,
-        user: User | None = None,
-        member: Member | None = None,
-        client: Any = None,
-        state: dict[str, Any] | None = None,
-        args: list[Any] | None = None,
-    ) -> None:
-        self._interaction_ctx = interaction_ctx
-        self._guild = guild
-        self._channel = channel
-        self._user = user
-        self._member = member
-        self._client = client
-        #: Por dispatch, compartilhado com middleware — e com o
-        #: `EventContext` do mesmo `INTERACTION_CREATE` (`0026` §6).
-        #: Nasce vazio quando o chamador não repassa, que é o caso do
-        #: contexto montado à mão em teste.
-        self._state: dict[str, Any] = state if state is not None else {}
-        #: Lista viva — a mutação propaga para os próximos handlers no
-        #: modo `sequential`, e é por design.
-        self._args: list[Any] = list(args) if args is not None else []
-
-    # ------------------------------------------------------------------
-    # Quem e onde
-    # ------------------------------------------------------------------
-
-    @property
-    def interaction(self) -> Interaction:
-        """O payload, dado puro. Para ler `data`, `id`, `token`…"""
-        return self._interaction_ctx.interaction
-
-    @property
-    def interaction_context(self) -> InteractionContext:
-        """O dono do estado. `ctx.reply()` já delega; exposto para
-        quem precisa do objeto — testes e extensões."""
-        return self._interaction_ctx
-
-    @property
-    def guild(self) -> Guild | None:
-        """Do cache local. `None` em interação de DM."""
-        return self._guild
-
-    @property
-    def channel(self) -> Channel | None:
-        return self._channel
-
-    @property
-    def user(self) -> User | None:
-        """Quem invocou. Em guild vem do `member.user`; em DM vem do
-        `user` da interação."""
-        return self._user
-
-    @property
-    def member(self) -> Member | None:
-        """`None` em DM — membros só existem em guild."""
-        return self._member
-
-    @property
-    def client(self) -> Any:
-        """O `Client` que despachou. `None` em teste unitário."""
-        return self._client
-
-    @property
-    def state(self) -> dict[str, Any]:
-        """Espaço por dispatch, compartilhado com as middlewares.
-
-        `ctx.state["chave"]` é a forma de uma middleware passar dado a
-        um handler sem adicionar atributo ao contexto. Não vaza entre
-        dispatches — nasce vazio a cada um.
-        """
-        return self._state
-
-    @property
-    def args(self) -> list[Any]:
-        """Argumentos posicionais, mutáveis.
-
-        A mutação **propaga** para os próximos handlers no modo
-        `sequential` — é o recurso documentado da `10` §8 para
-        reordenar ou substituir argumentos entre handlers.
-        """
-        return self._args
-
-    # ------------------------------------------------------------------
-    # Resposta — delegação pura
-    # ------------------------------------------------------------------
-
-    @property
-    def state_resposta(self) -> InteractionState:
-        """Estado da máquina, para quem quer consultar sem perguntar."""
-        return self._interaction_ctx.state
-
-    def is_responded(self) -> bool:
-        """Já houve qualquer resposta — defer inclusive."""
-        return self._interaction_ctx.is_responded()
-
-    def is_deferred(self) -> bool:
-        return self._interaction_ctx.is_deferred()
-
-    def is_answered(self) -> bool:
-        return self._interaction_ctx.is_answered()
-
-    async def reply(self, content: str | None = None, **kwargs: Any) -> None:
-        await self._interaction_ctx.reply(content, **kwargs)
-
-    async def defer(self, *, ephemeral: bool = False) -> None:
-        await self._interaction_ctx.defer(ephemeral=ephemeral)
-
-    async def defer_update(self) -> None:
-        await self._interaction_ctx.defer_update()
-
-    async def update(self, content: str | None = None, **kwargs: Any) -> None:
-        await self._interaction_ctx.update(content, **kwargs)
-
-    async def ack(self) -> None:
-        await self._interaction_ctx.ack()
-
-    async def edit(
-        self,
-        content: str | None = None,
-        *,
-        message_id: str | int = "@original",
-        **kwargs: Any,
-    ) -> None:
-        await self._interaction_ctx.edit(content, message_id=message_id, **kwargs)
-
-    async def delete(self, *, message_id: str | int = "@original") -> None:
-        await self._interaction_ctx.delete(message_id=message_id)
-
-    async def fetch_reply(self, *, message_id: str | int = "@original") -> Any:
-        return await self._interaction_ctx.fetch_reply(message_id=message_id)
-
-    async def follow_up(self, content: str | None = None, **kwargs: Any) -> Any:
-        return await self._interaction_ctx.follow_up(content, **kwargs)
-
-    async def send_modal(self, modal: Any) -> None:
-        await self._interaction_ctx.send_modal(modal)
-
-    async def launch_activity(self) -> None:
-        await self._interaction_ctx.launch_activity()
-
-    # ------------------------------------------------------------------
-    # Opções
-    # ------------------------------------------------------------------
+    __slots__ = ()
 
     @property
     def options(self) -> OptionsAccessor:
         """As opções declaradas, já convertidas pelo conversor."""
         return OptionsAccessor(self.interaction)
 
-    # ------------------------------------------------------------------
-    # Context menu — 0022
-    # ------------------------------------------------------------------
-
     @property
-    def target_user(self) -> User:
-        """Alvo do menu USER. `AttributeError` em CHAT_INPUT — o
-        alvo de menu vem do clique, e slash não tem alvo."""
-        return cast("User", self._exige_menu("target_user"))
+    def command_name(self) -> str | None:
+        """Nome do comando invocado."""
+        return self.interaction.command_name
 
-    @property
-    def target_member(self) -> Member | None:
-        """Alvo do menu USER, se o cache tiver o membro."""
-        return cast("Member | None", self._exige_menu("target_member"))
-
-    @property
-    def target_message(self) -> Message:
-        """Alvo do menu MESSAGE."""
-        return cast("Message", self._exige_menu("target_message"))
-
-    def _exige_menu(self, campo: str) -> Any:
+    def _tabela_de_alvo(self, tabela: str, campo: str) -> Any:
+        """Um objeto de `data.resolved`, com erro que cita o campo."""
         data = self.interaction.data or {}
         resolved = data.get("resolved", {})
-
-        if campo == "target_user":
-            alvos = resolved.get("users") or {}
-        elif campo == "target_member":
-            alvos = resolved.get("members") or {}
-        elif campo == "target_message":
-            alvos = resolved.get("messages") or {}
-        else:
-            alvos = {}
-
+        alvos = (resolved.get(tabela) or {}) if isinstance(resolved, Mapping) else {}
         if not alvos:
             raise AttributeError(
-                f"{campo} não existe em comando CHAT_INPUT — o alvo vem do clique em "
+                f"{campo} não existe nesta interação — o alvo vem do clique em "
                 f"menu USER/MESSAGE, e /comando não tem alvo"
             )
         return next(iter(alvos.values()))
+
+
+class UserCommandInteraction(CommandInteraction):
+    """Menu de contexto sobre **usuário** — o alvo vem do clique."""
+
+    __slots__ = ()
+
+    @property
+    def target_user(self) -> User:
+        """Alvo do menu USER. `AttributeError` se o payload não trouxer."""
+        return cast("User", User.from_payload(dict(self._tabela_de_alvo("users", "target_user"))))
+
+    @property
+    def target_member(self) -> Member | None:
+        """Alvo do menu USER como membro — `None` se o payload não
+        trouxer o `resolved.members` correspondente.
+
+        `resolved.members[id]` vem **sem** `user`; o `user` está em
+        `resolved.users[id]` — mesma fusão do `OptionsAccessor.
+        get_member`.
+        """
+        data = self.interaction.data or {}
+        resolved = data.get("resolved", {})
+        membros = (resolved.get("members") or {}) if isinstance(resolved, Mapping) else {}
+        usuarios = (resolved.get("users") or {}) if isinstance(resolved, Mapping) else {}
+        if not membros:
+            return None
+        id_alvo, bruto = next(iter(membros.items()))
+        if not isinstance(bruto, Mapping):
+            return None
+        fundido = dict(bruto)
+        usuario = usuarios.get(str(id_alvo))
+        if isinstance(usuario, Mapping):
+            fundido["user"] = usuario
+        return Member.from_payload(fundido)
+
+
+class MessageCommandInteraction(CommandInteraction):
+    """Menu de contexto sobre **mensagem** — o alvo vem do clique."""
+
+    __slots__ = ()
+
+    @property
+    def target_message(self) -> Message:
+        """Alvo do menu MESSAGE. `AttributeError` se não vier."""
+        bruto = self._tabela_de_alvo("messages", "target_message")
+        return cast("Message", Message.from_payload(dict(bruto)))
+
+
+class EntryPointInteraction(CommandInteraction):
+    """`PRIMARY_ENTRY_POINT` — inicialização de Activity."""
+
+    __slots__ = ()
 
 
 class OptionsAccessor:
@@ -254,7 +121,7 @@ class OptionsAccessor:
     não existe". Misturar as duas obriga a ler a pilha para saber qual.
 
     Opções de subcommand são **achatadas**: com
-    ``/grupo sub op:1``, ``ctx.options["op"]`` funciona — sem o
+    ``/grupo sub op:1``, ``interaction.options["op"]`` funciona — sem o
     `getSubcommand()` do discord.js para chegar até ela. O subcommand
     em si continua consultável, porque às vezes a pergunta é "qual
     ramo foi invocado" e não "qual o valor".
@@ -317,7 +184,7 @@ class OptionsAccessor:
         return nome in self._valores
 
     def __getattr__(self, nome: str) -> Any:
-        """`ctx.options.pontos` só para opção declarada.
+        """`interaction.options.pontos` só para opção declarada.
 
         `AttributeError` com a lista do que existe — sem isto, o Python
         devolveria um `AttributeError` interno de `__slots__` que não
@@ -439,3 +306,33 @@ class OptionsAccessor:
         if bruto is None:
             return None
         return modelo.from_payload(dict(bruto))
+
+
+#: `ApplicationCommandType` → classe entregue ao handler. O payload do
+#: Discord traz o tipo, e o tipo decide a classe — nunca a anotação.
+CLASSES_COMANDO: dict[ApplicationCommandType, type[CommandInteraction]] = {
+    ApplicationCommandType.CHAT_INPUT: CommandInteraction,
+    ApplicationCommandType.USER: UserCommandInteraction,
+    ApplicationCommandType.MESSAGE: MessageCommandInteraction,
+    ApplicationCommandType.PRIMARY_ENTRY_POINT: EntryPointInteraction,
+}
+
+
+def classe_de_comando(tipo: ApplicationCommandType) -> type[CommandInteraction]:
+    """A classe de interação para um tipo de comando.
+
+    Tipo novo do Discord cai em `CommandInteraction` — a superfície
+    comum existe justamente para o caso em que o Discord anda à frente.
+    """
+    return CLASSES_COMANDO.get(tipo, CommandInteraction)
+
+
+__all__ = [
+    "CLASSES_COMANDO",
+    "CommandInteraction",
+    "EntryPointInteraction",
+    "MessageCommandInteraction",
+    "OptionsAccessor",
+    "UserCommandInteraction",
+    "classe_de_comando",
+]

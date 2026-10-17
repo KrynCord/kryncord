@@ -30,7 +30,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from kryncord.errors import BlockHandlers
-from kryncord.events.context import EventContext
+from kryncord.events.context import EventFrame
 from kryncord.events.names import normalize_event_name
 from kryncord.events.payloads import monta_args, usa_parsed
 from kryncord.internal.compose import block
@@ -57,13 +57,16 @@ Parser = Callable[[Mapping[str, Any]], Any]
 #: síncrona ainda falha alto, com `TypeError`, que é o erro certo.
 EventHandler = Callable[[Any], Awaitable[Any]]
 
-#: Uma middleware de evento — `fn(ctx, block)`, com `block` sempre no
-#: segundo lugar (`0017`). Assíncrona, obrigatoriamente.
+#: Uma middleware de evento — `fn(frame, block)`, com `block` sempre no
+#: segundo lugar (`0017`). Assíncrona, obrigatoriamente. O `frame` é o
+#: `EventFrame` interno — só middleware e `on_error` o veem (`0031`).
 EventMiddleware = Callable[[Any, Any], Awaitable[None]]
 
-#: `fn(ctx, error)` — mesma ordem nos três tipos, definida pelo
-#: `ErrorHandler` do `0010`. A ideia 10 §7 escrevia `(error, ctx)`; a
-#: ordem que prevaleceu é a do alias que o `Config` já declara.
+#: `fn(frame, error)` — mesma ordem nos três tipos, definida pelo
+#: `ErrorHandler` do `0010`. A ideia 10 §7 escrevia `(error, frame)`; a
+#: ordem que prevaleceu é a do alias que o `Config` já declara. O
+#: `frame` é o `EventFrame` interno (`0031`) — o handler não o vê, o
+#: tratador de erro vê, porque precisa do nome do evento e do client.
 ErrorHandler = Callable[[Any, BaseException], Awaitable[None]]
 
 
@@ -115,11 +118,6 @@ class EventEntry:
     #: duas vezes é como um bot "conecta" duas vezes.
     once: bool = False
 
-    #: Se recebe `EventContext` na frente dos argumentos. `@event` sim,
-    #: `client.on` não (`0020`) — a única diferença entre os dois
-    #: caminhos de registro.
-    with_context: bool = False
-
 
 def _is_async_callable(fn: Any) -> bool:
     """Se `fn` é algo que devolve coroutine quando chamado.
@@ -162,7 +160,6 @@ class EventDispatcher:
         label: str = "",
         tags: Iterable[str] = (),
         once: bool = False,
-        with_context: bool = False,
     ) -> None:
         """Registra um handler. Aceita ``"MESSAGE_CREATE"`` ou
         ``"message_create"`` — os dois chegam ao mesmo lugar.
@@ -185,7 +182,6 @@ class EventDispatcher:
                 label=label or getattr(handler, "__qualname__", repr(handler)),
                 tags=tuple(tags),
                 once=once,
-                with_context=with_context,
             )
         )
 
@@ -244,22 +240,22 @@ class EventDispatcher:
         nome = normalize_event_name(name)
         parsed = self._parse(name, data) if usa_parsed(name) else data
         args = list(monta_args(nome, parsed, old, data))
-        ctx = EventContext(nome, args, client=client, state=state)
+        frame = EventFrame(nome, args, client=client, state=state)
 
         entradas = self._entradas_de(nome)
         if not entradas and not middleware:
             return
 
-        vivas = await self._prepara(nome, ctx, entradas, tuple(middleware), on_error)
+        vivas = await self._prepara(nome, frame, entradas, tuple(middleware), on_error)
         if vivas is None:
             return
         if not vivas:
             return
 
         if mode == "concurrent":
-            await self._concurrent(nome, ctx, vivas, on_error)
+            await self._concurrent(nome, frame, vivas, on_error)
         else:
-            await self._sequential(nome, ctx, vivas, on_error)
+            await self._sequential(nome, frame, vivas, on_error)
 
     # ------------------------------------------------------------------
     # Cadeia de execução
@@ -268,7 +264,7 @@ class EventDispatcher:
     async def _prepara(
         self,
         nome: str,
-        ctx: EventContext,
+        frame: EventFrame,
         entradas: tuple[EventEntry, ...],
         cadeia: tuple[EventMiddleware, ...],
         on_error: ErrorHandler | None,
@@ -290,14 +286,14 @@ class EventDispatcher:
         bloqueio: BlockHandlers | None = None
         for item in cadeia:
             try:
-                await item(ctx, block)
+                await item(frame, block)
             except BlockHandlers as exc:
                 bloqueio = exc
                 break
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
-                await self._erro(on_error, ctx, exc)
+                await self._erro(on_error, frame, exc)
                 return None
 
         if bloqueio is None:
@@ -324,19 +320,19 @@ class EventDispatcher:
     async def _sequential(
         self,
         nome: str,
-        ctx: EventContext,
+        frame: EventFrame,
         entradas: tuple[EventEntry, ...],
         on_error: ErrorHandler | None,
     ) -> None:
         """Um `await` por vez, na ordem de registro.
 
-        A mutação de `ctx.args` propaga porque o `*ctx.args` é lido a
-        cada chamada, e a lista é a mesma — é o recurso documentado da
+        A mutação de `frame.args` propaga porque o `*frame.args` é lido
+        a cada chamada, e a lista é a mesma — é o recurso documentado da
         ideia 10 §8, e a razão de o `sequential` ser o default.
         """
         for entrada in entradas:
             try:
-                await self._chama(entrada, ctx)
+                await self._chama(entrada, frame)
             except BlockHandlers:
                 # `block()` chamado **dentro** de um handler: aborta os
                 # que faltam, como em middleware. `on_error` não roda
@@ -346,12 +342,12 @@ class EventDispatcher:
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
-                await self._erro(on_error, ctx, exc)
+                await self._erro(on_error, frame, exc)
 
     async def _concurrent(
         self,
         nome: str,
-        ctx: EventContext,
+        frame: EventFrame,
         entradas: tuple[EventEntry, ...],
         on_error: ErrorHandler | None,
     ) -> None:
@@ -362,8 +358,8 @@ class EventDispatcher:
         é filho do dispatch, que é filho do `Client`, então o `close()`
         alcança as tasks sem código novo.
 
-        Quem não quer esperar usa `ctx.spawn` — que é o que o `TaskGroup`
-        do `0012` existe para não ser.
+        Quem não quer esperar usa `spawn` no frame — que é o que o
+        `TaskGroup` do `0012` existe para não ser.
         """
         async with asyncio.TaskGroup() as grupo:
             for entrada in entradas:
@@ -371,27 +367,29 @@ class EventDispatcher:
                 # escapar cancelaria o pai — é como o `TaskGroup` do
                 # CPython funciona, e um log de um handler nunca pode
                 # derrubar o bot (`0006`).
-                grupo.create_task(self._guardada(entrada, ctx, on_error))
+                grupo.create_task(self._guardada(entrada, frame, on_error))
 
     async def _guardada(
         self,
         entrada: EventEntry,
-        ctx: EventContext,
+        frame: EventFrame,
         on_error: ErrorHandler | None,
     ) -> None:
         """Uma task do modo `concurrent` — exceção vai para o `on_error`."""
         try:
-            await self._chama(entrada, ctx)
+            await self._chama(entrada, frame)
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            await self._erro(on_error, ctx, exc)
+            await self._erro(on_error, frame, exc)
 
-    async def _chama(self, entrada: EventEntry, ctx: EventContext) -> None:
+    async def _chama(self, entrada: EventEntry, frame: EventFrame) -> None:
         """Chama um handler com o que ele prometeu no registro.
 
-        `*ctx.args` lê a **lista viva** neste momento — é o que faz a
-        mutação da middleware ter efeito nos handlers seguintes.
+        O handler recebe **só o payload** (`0031`) — o mesmo contrato do
+        `client.on`, um caminho para os dois. `*frame.args` lê a
+        **lista viva** neste momento, é o que faz a mutação da middleware
+        ter efeito nos handlers seguintes.
 
         `once=True` é consumido **aqui**, depois do `await` bem sucedido:
         é o único lugar onde "rodou" é um fato, e não uma intenção. Um
@@ -399,17 +397,14 @@ class EventDispatcher:
         transformaria um `on_error` transitório num handler morto para
         sempre, sem ninguém ter visto o erro duas vezes.
         """
-        if entrada.with_context:
-            await entrada.handler(ctx, *ctx.args)
-        else:
-            await entrada.handler(*ctx.args)
+        await entrada.handler(*frame.args)
         if entrada.once:
-            self.remove(ctx.name, entrada.handler)
+            self.remove(frame.name, entrada.handler)
 
     async def _erro(
         self,
         on_error: ErrorHandler | None,
-        ctx: EventContext,
+        frame: EventFrame,
         exc: BaseException,
     ) -> None:
         """O `on_error` do evento, ou o log quando não há um.
@@ -418,14 +413,14 @@ class EventDispatcher:
         exceção sem tratador no meio de um despacho (`0017`).
         """
         if on_error is None:
-            log.error("Erro no handler do evento %s", ctx.name, exc_info=exc)
+            log.error("Erro no handler do evento %s", frame.name, exc_info=exc)
             return
         try:
-            await on_error(ctx, exc)
+            await on_error(frame, exc)
         except asyncio.CancelledError:
             raise
         except Exception:
-            log.exception("on_error do evento %s também falhou", ctx.name)
+            log.exception("on_error do evento %s também falhou", frame.name)
 
     # ------------------------------------------------------------------
     # Utilidades

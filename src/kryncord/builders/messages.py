@@ -40,10 +40,10 @@ class ReplyOptions:
     """Os argumentos de uma resposta, tipados e validados.
 
         opts = ReplyOptions(content="Escolha:", components=[row])
-        await ctx.reply(**opts.to_payload())
+        await interaction.respond(**opts.to_payload())
 
     `to_payload()` devolve o `dict` pronto — validado pela tabela
-    V1 × V2 e serializado. Passar objeto direto em `ctx.reply(...)`
+    V1 × V2 e serializado. Passar objeto direto em `interaction.respond(...)`
     também funciona: os `kwargs` passam pela mesma normalização
     na camada `api/`.
     """

@@ -1,13 +1,14 @@
-"""Conversão por anotação — o `:user_id` cru vira `int`, `User`, `datetime`.
+"""Conversão por anotação — o `{user_id}` cru vira `int`, `User`, `datetime`.
 
 A anotação **é** o conversor. No TS tudo é string e você chama `parse`
 à mão; em Python a anotação já existe, o mypy já a lê, e duplicar isso
 numa string mágica seria criar o typo que nenhuma checagem pega.
 
-A assinatura é ``fn(raw, ctx) -> T`` — sempre os dois. O `ctx` é o
-`ResponderContext`, que já tem `.client` e `.cache`; conversores simples
-ignoram o segundo argumento. Um objeto a mais de "contexto de conversão"
-seria um terceiro contexto para aprender (0014).
+A assinatura é ``fn(raw, inter) -> T`` — sempre os dois. O `inter` é a
+interação tipada (`ButtonInteraction`, `ModalSubmitInteraction`…), que
+já tem `.client` e `.state`; conversores simples ignoram o segundo
+argumento. Um objeto a mais de "contexto de conversão" seria um terceiro
+contexto para aprender (0014).
 
 Síncrono e assíncrono são aceitos, e **síncrono não é embrulhado**:
 `await` por parâmetro por invocação é o custo que a disciplina síncrona
@@ -248,7 +249,7 @@ def resolve_conversor(anotacao: Any) -> tuple[Any, bool]:
 
     `conversor=None` é identidade — string crua passa. `opcional=True`
     é a anotação `T | None`, que o 0013 trata como o mesmo sinal do
-    `?:` na rota.
+    `{?x}` na rota.
 
     Anotação desconhecida é erro **aqui**, na importação, com o nome
     da anotação na mensagem — não no clique, com um `TypeError` que
@@ -395,16 +396,19 @@ def _e_variadic(fn: Any) -> bool:
 
 @functools.lru_cache(maxsize=512)
 def _nomes_de_rota(rota: str) -> frozenset[str]:
-    from kryncord.responders.ids import WILDCARD, parse_rota
+    from kryncord.responders.ids import parse_rota
 
-    return frozenset(s.nome for s in parse_rota(rota) if (s.e_param or s.tipo == WILDCARD))
+    #: `s.nomes` cobre param puro, `{?x}` e misto (`produto:{id}`) de
+    #: uma vez — a forma antiga (`s.e_param or wildcard`) perdia o
+    #: embutido.
+    return frozenset(nome for s in parse_rota(rota) for nome in s.nomes)
 
 
 @functools.lru_cache(maxsize=512)
 def _e_opcional_na_rota(rota: str, nome: str) -> bool:
-    from kryncord.responders.ids import OPCIONAL, parse_rota
+    from kryncord.responders.ids import parse_rota
 
-    return any(s.tipo == OPCIONAL and s.nome == nome for s in parse_rota(rota))
+    return any(nome in s.opcionais for s in parse_rota(rota))
 
 
 @functools.lru_cache(maxsize=512)
@@ -437,7 +441,7 @@ def plano_de(fn: Any, rota: str) -> tuple[ItemPlano, ...]:
     - ``fn(ctx, params)`` → o dict cru, injetado pelo dispatcher à
       parte; o item sai do plano para não passar duas vezes.
 
-    Opcional é a **união** dos dois sinais: `?:` na rota ou `| None`
+    Opcional é a **união** dos dois sinais: `{?x}` na rota ou `| None`
     na anotação. Os exemplos da 0013 usam cada forma de um jeito, e
     recusar a combinação seria recusar o código mais natural.
     """

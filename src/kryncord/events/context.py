@@ -1,13 +1,19 @@
-"""`EventContext` — o primeiro argumento de um handler registrado com `@event`.
+"""`EventFrame` — o quadro interno de um dispatch de evento.
 
-A diferença entre os dois caminhos de registro é esta e só esta
-(`0020`): `client.on` recebe os argumentos crus do evento; `@event`
-recebe o contexto na frente e os mesmos argumentos depois. Uma tabela,
-dois caminhos, e a diferença é o `ctx`.
+O handler **não** vê este objeto (`0031`): `client.on` e `@event`
+recebem o payload só, um caminho para os dois. O quadro mora onde o
+payload não basta — a middleware (`fn(frame, block)`) e o `on_error`
+(`fn(frame, exc)`), que precisam do nome do evento, do client e do
+espaço compartilhado, e que são mecanismos internos, não a superfície
+que o autor do bot escreve contra.
+
+Não está em `__all__` de `kryncord.events` de propósito: não é API
+pública, e exportá-lo recriaria o "contexto na frente do payload" que
+a migração acabou de remover.
 
 ## `args` é `list` e é mutável de propósito
 
-Middleware pode **injetar** argumento: escrever `ctx.args[0] = outro`
+Middleware pode **injetar** argumento: escrever `frame.args[0] = outro`
 muda o que os handlers recebem no modo `sequential`. A ideia 10 §6 traz
 esse recurso do TypeScript e ele só funciona com lista viva — tupla
 imutável faria a injeção falhar em silêncio.
@@ -17,11 +23,11 @@ daqui para frente alcança só quem ainda não rodou. Não é bug, é o
 contrato do `sequential` ser o default: quem escolhe concorrência já
 escolheu que a ordem entre handlers não é garantida.
 
-## `state` é por dispatch, não por contexto
+## `state` é por dispatch, não por quadro
 
 O `0012` diz "criado por dispatch". Um `INTERACTION_CREATE` alimenta o
 roteamento de interação **e** os handlers de `@event("interaction_create")`,
-e os dois contexts são objetos diferentes — o dicionário é que é o
+e os dois frames são objetos diferentes — o dicionário é que é o
 mesmo. Nasce vazio, morre no fim do despacho.
 """
 
@@ -37,7 +43,7 @@ if TYPE_CHECKING:
     from kryncord.internal.tasks import TaskRegistry
 
 
-class EventContext:
+class EventFrame:
     """O evento em si: qual, com o quê, e para quem."""
 
     __slots__ = ("_args", "_client", "_name", "_state", "_tasks")
@@ -86,9 +92,9 @@ class EventContext:
 
     @property
     def client(self) -> Client | None:
-        """O `Client`, ou `None` em contexto montado à mão.
+        """O `Client`, ou `None` em quadro montado à mão.
 
-        `None` existe porque o `EventContext` é construído pelo
+        `None` existe porque o `EventFrame` é construído pelo
         dispatcher, e o dispatcher é construído pelo `Client` — passar
         o client por aqui seria um ciclo em tempo de importação que não
         ganha nada.
@@ -99,7 +105,7 @@ class EventContext:
     def state(self) -> dict[str, Any]:
         """Espaço por dispatch, compartilhado com as middlewares.
 
-        Uma middleware escreve `ctx.state["x"]` e o handler lê. Com o
+        Uma middleware escreve `frame.state["x"]`. Com o
         `INTERACTION_CREATE`, o mesmo dicionário chega ao contexto do
         comando ou do responder que o roteamento construiu — é o
         único caso em que dois objetos diferentes carregam o mesmo
@@ -120,14 +126,14 @@ class EventContext:
         promete.
 
         É também o que substitui o "o dispatcher não espera" da ideia
-        10 §5 — quem quer paralelismo sem esperar chama `ctx.spawn` e
+        10 §5 — quem quer paralelismo sem esperar chama `frame.spawn` e
         devolve.
         """
         tasks = self._tasks or getattr(self._client, "_tasks", None)
         if tasks is None:
             raise RuntimeError(
                 "spawn() precisa de um TaskRegistry — o Client fornece um no boot. "
-                "Contexto montado à mão em teste: passe tasks=TaskRegistry()."
+                "Quadro montado à mão em teste: passe tasks=TaskRegistry()."
             )
         return tasks.spawn(coro, nome=nome)
 

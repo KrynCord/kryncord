@@ -1,16 +1,31 @@
 """Roteador declarativo para botões, selects e modais.
 
-Roteia `custom_id` como rota HTTP: `/manage/user/:user_id/:action`. O
-roteador compila os padrões e ordena por especificidade — literal
-pesa mais que `:param`, que pesa mais que `?:param`, que pesa mais que
-`**` (0013).
+Roteia `custom_id` como rota: `/manage/user/{user_id}/{action}` —
+literal, `{param}` obrigatório, `{?param}` opcional, `**` curinga no
+fim (0013, revisto no `0031`). O roteador compila os padrões e ordena
+por especificidade — literal pesa mais que `{param}`, que pesa mais que
+`{?param}`, que pesa mais que `**`.
+
+O que o handler recebe é a **interação tipada** (`0031`): a classe vem
+do tipo da interação — `@button` entrega `ButtonInteraction`,
+`@modal_submit` entrega `ModalSubmitInteraction`, e por diante. Um
+objeto genérico "ctx" não existe mais na API pública.
 
 Atenção: parâmetro extraído de `custom_id` é **dado**, não autorização.
 Quem constrói o `custom_id` pode ser qualquer um. Permissão é checagem
 do handler.
 """
 
-from kryncord.responders.context import ResponderContext
+from kryncord.interactions.components import (
+    ButtonInteraction,
+    ChannelSelectInteraction,
+    ComponentInteraction,
+    MentionableSelectInteraction,
+    ModalSubmitInteraction,
+    RoleSelectInteraction,
+    StringSelectInteraction,
+    UserSelectInteraction,
+)
 from kryncord.responders.converters import (
     converte,
     plano_de,
@@ -18,7 +33,16 @@ from kryncord.responders.converters import (
     registrar_conversor,
     resolve_conversor,
 )
-from kryncord.responders.decorators import responder
+from kryncord.responders.decorators import (
+    button,
+    channel_select,
+    mentionable_select,
+    modal_submit,
+    responder,
+    role_select,
+    string_select,
+    user_select,
+)
 from kryncord.responders.dispatch import (
     Esperas,
     block,
@@ -38,21 +62,32 @@ from kryncord.responders.registry import Match, ResponderEntry, ResponderRegistr
 
 __all__ = [
     "MAX_CUSTOM_ID",
+    "ButtonInteraction",
+    "ChannelSelectInteraction",
+    "ComponentInteraction",
     "Esperas",
     "Match",
+    "MentionableSelectInteraction",
+    "ModalSubmitInteraction",
     "Padrao",
     "Params",
-    "ResponderContext",
     "ResponderEntry",
     "ResponderRegistry",
+    "RoleSelectInteraction",
     "Segmento",
+    "StringSelectInteraction",
+    "UserSelectInteraction",
     "block",
     "build_custom_id",
+    "button",
+    "channel_select",
     "compose",
     "conflitam",
     "converte",
     "dispatch_responder",
     "emit_responder",
+    "mentionable_select",
+    "modal_submit",
     "ordena",
     "parse_rota",
     "plano_de",
@@ -60,4 +95,7 @@ __all__ = [
     "registrar_conversor",
     "resolve_conversor",
     "responder",
+    "role_select",
+    "string_select",
+    "user_select",
 ]
