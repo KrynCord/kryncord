@@ -5,6 +5,72 @@ numeração em [SemVer](https://semver.org/lang/pt-BR/).
 
 ## [Unreleased]
 
+## [0.3.0b1] — 2026-10-17
+
+O módulo Gateway completo, com paridade comportamental com o
+`@discordjs/ws` (v2.0.2) — a matriz de 54 itens e as divergências
+deliberadas estão no dossiê `update/gateway/`. Cinco fases, um commit
+cada, gates verdes em todas.
+
+### Adicionado
+
+- **Fase A — teto de `READY` e budget de envio.**
+  `ready_timeout` (15s, `GatewayConfig`) aplicado de verdade: o `READY`
+  ou `RESUMED` que não chega vira `GatewayError` e o ciclo de
+  recuperação tenta de novo — antes, um servidor que aceitasse o socket
+  e ficasse calado deixaria o bot ligado para sempre. Ops importantes
+  (1 heartbeat, 2 identify, 6 resume) não contam no budget de 115
+  frames, e a janela reseta a cada (re)connect, como no discord.js.
+- **Fase B — Request Guild Members (op 8).**
+  `Client.request_guild_members()` / `GatewayClient.request_guild_members()`:
+  o `guild.members.fetch()` em payload cru — pede os membros de uma
+  guild pela conexão e devolve a soma dos `GUILD_MEMBERS_CHUNK`.
+  Nonce de até 32 chars (gerado quando ausente), prazo de 120s
+  renovado a cada chunk, teto de 5 pedidos simultâneos (melhoria sobre
+  o discord.js), conclusão pelas três regras do `GuildMemberManager`.
+  Erros novos: `MemberRequestError`, `MemberRequestTimeout`,
+  `MemberRequestRateLimited` (com `retry_after`), `TooManyMemberRequests`.
+- **Fase C — Presence em runtime (op 3).**
+  `Client.update_presence()` / `GatewayClient.update_presence()`: status,
+  atividades e `afk` sem reconectar, com teto client-side de 5 updates
+  por 20s — quem manda mais paga a espera, em vez de ter o update
+  sumindo sem aviso (regra §13). `status` validado na cara, listando as
+  opções do Discord.
+- **Fase D — multi-shard.**
+  `GatewayManager`: N shards em um processo, shards em paralelo sem
+  stagger (como o `SimpleShardingStrategy`), **um** throttler de
+  identify compartilhado (bucket = `shard % max_concurrency`), latência
+  = média das shards, pronto = todas prontas. `Client` ganha
+  `shard_ids` e `gateway_information`; quem pede `shard_ids` sem a
+  informação leva um fetch de `GET /gateway/bot` na véspera de
+  conectar (`session_start_limit` envelhece). Rota REST
+  `client.api.gateway.bot()` → `GatewayBotInfo`/`SessionStartLimit`.
+  Falha fatal numa shard fecha o manager inteiro e propaga o erro
+  original — bot meio ligado é pior que desligado.
+- **Fase E — compressão `zstd-stream`.**
+  Extra `kryncord[zstd]` (`zstandard>=0.22`); sem a lib, o pedido
+  falha no primeiro frame dizendo o comando de instalação. Cada frame
+  WS é um frame zstd completo, como no discord.js.
+
+### Alterado
+
+- `op 9` (`INVALID_SESSION`) não dorme mais 1–5s antes de retomar: o
+  backoff da política de reconexão e o throttler de identify já dão o
+  anti-thrash — o `@discordjs/ws` removeu a espera pelo mesmo motivo.
+- `Client.start()` devolve quando **todas** as shards estão prontas;
+  `client.gateway` agora é o `GatewayManager` (com uma shard só, ele
+  tem exatamente uma — `ready`, `latency` e `close` seguem iguais).
+- `_unless_closing` generalizado: o `close()` devolve na hora não só
+  do backoff entre tentativas, mas também da espera da janela do
+  throttler do identify.
+
+### Removido
+
+- `GatewayConfig.invalid_session_wait`, `GatewayConfig.identify_timeout`
+  e `GatewayConfig.resume_timeout` — eram validados e nunca lidos por
+  nenhum código (a espera do op 9 saiu justamente por isso, e os
+  dois últimos nunca tiveram efeito).
+
 ## [0.2.0b3] — 2026-10-17
 
 A latência do Gateway vira superfície pública — o número que o

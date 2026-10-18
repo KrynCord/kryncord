@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "kryncord"
-version = "0.2.0b3"
+version = "0.3.0b1"
 description = "Async-first Discord API library for Python"
 readme = "README.md"
 requires-python = ">=3.11"
