@@ -41,6 +41,7 @@ from typing import Any
 
 from kryncord.api.applications import ApplicationsAPI
 from kryncord.api.channels import ChannelsAPI
+from kryncord.api.gateway import GatewayAPI
 from kryncord.api.guilds import GuildsAPI
 from kryncord.api.interactions import InteractionsAPI
 from kryncord.api.members import MembersAPI
@@ -54,6 +55,7 @@ __all__ = [
     "ApplicationsAPI",
     "ChannelsAPI",
     "DiscordAPI",
+    "GatewayAPI",
     "GuildsAPI",
     "InteractionsAPI",
     "MembersAPI",
@@ -77,6 +79,7 @@ class DiscordAPI:
         "_rest",
         "applications",
         "channels",
+        "gateway",
         "guilds",
         "interactions",
         "members",
@@ -97,6 +100,7 @@ class DiscordAPI:
         self.webhooks = WebhooksAPI(rest)
         self.applications = ApplicationsAPI(rest)
         self.interactions = InteractionsAPI(rest)
+        self.gateway = GatewayAPI(rest)
 
     @property
     def rest(self) -> RESTClient:

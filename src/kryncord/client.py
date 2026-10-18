@@ -38,15 +38,16 @@ from kryncord.config import Config
 from kryncord.errors import GatewayError, LifecycleError
 from kryncord.events.dispatcher import EventHandler
 from kryncord.events.snapshot import instantanea
-from kryncord.gateway.client import GatewayClient
 from kryncord.gateway.compression import CompressionMode
 from kryncord.gateway.connection import GatewayTransport, WebSocketConnection
+from kryncord.gateway.manager import GatewayManager
 from kryncord.gateway.session import SessionStore
 from kryncord.http.authentication import Token
 from kryncord.intents import Intents
 from kryncord.internal.tasks import TaskRegistry
 from kryncord.lifecycle import Lifecycle
 from kryncord.logging import get_logger
+from kryncord.models.gateway import GatewayBotInfo
 from kryncord.registry import Registry
 from kryncord.registry import registry as _registry_global
 from kryncord.responders.dispatch import Esperas
@@ -101,6 +102,7 @@ class Client:
         "_esperas",
         "_gateway",
         "_gateway_failure",
+        "_gateway_information",
         "_lifecycle",
         "_loop",
         "_parar",
@@ -108,6 +110,7 @@ class Client:
         "_registry",
         "_rest",
         "_session_store",
+        "_shard_ids",
         "_started",
         "_state",
         "_tasks",
@@ -124,6 +127,8 @@ class Client:
         session_store: SessionStore | None = None,
         compression: CompressionMode = CompressionMode.NONE,
         http_transport: httpx.AsyncBaseTransport | None = None,
+        shard_ids: Sequence[int] | None = None,
+        gateway_information: GatewayBotInfo | None = None,
     ) -> None:
         self._config = config
         self._lifecycle = Lifecycle("client")
@@ -143,7 +148,16 @@ class Client:
         #: despacho: quem espera fica no handler, e quem resolve fica no
         #: próximo clique (`0023`, R3).
         self._esperas = Esperas()
-        self._gateway: GatewayClient | None = None
+        self._gateway: GatewayManager | None = None
+        #: Sharding: quais shards conectar, e o que o `/gateway/bot`
+        #: disse sobre a topologia. `shard_ids=None` + sem informação é
+        #: uma shard só — o comportamento de sempre, com zero REST novo.
+        #: Quem pede `shard_ids` sem a informação leva um fetch de
+        #: `/gateway/bot` **no `start()`**, na véspera de conectar: o
+        #: `session_start_limit` envelhece, e dado de sharding guardado
+        #: desde o boot é dado errado na hora de usar.
+        self._shard_ids = shard_ids
+        self._gateway_information = gateway_information
         #: Sinal de "alguém chamou `close()`" — é o que o `run()` (que
         #: bloqueia o thread) espera. O `_ready` não serve: ele é
         #: apagado no fechamento, e uma espera que nunca termina num
@@ -198,8 +212,12 @@ class Client:
         return self._ready.is_set()
 
     @property
-    def gateway(self) -> GatewayClient | None:
-        """A conexão Gateway, ou `None` antes do `start()`."""
+    def gateway(self) -> GatewayManager | None:
+        """O manager de shards, ou `None` antes do `start()`.
+
+        Com uma shard só (o default), o manager tem exatamente uma — o
+        objeto muda, o contrato não: `ready`, `latency`, `close`.
+        """
         return self._gateway
 
     @property
@@ -408,8 +426,19 @@ class Client:
         # decidir escopo de registro.
         self._registry.commands.reescopiar(self._config.commands.guilds)
 
-        self._gateway = self._build_gateway(token)
-        log.info("Conectando ao Gateway (intents=%s)", self._config.intents.to_payload())
+        gateway_information = self._gateway_information
+        if gateway_information is None and self._shard_ids is not None:
+            # Sharding pedido sem as informações: o `/gateway/bot`
+            # envelhece (o `session_start_limit` muda a cada identify),
+            # então busca aqui, na véspera de conectar — não no boot.
+            gateway_information = await self._api.gateway.bot()
+
+        self._gateway = self._build_manager(token, gateway_information)
+        log.info(
+            "Conectando ao Gateway (intents=%s, shards=%s)",
+            self._config.intents.to_payload(),
+            self._gateway.assignment.shard_ids,
+        )
 
         # Supervisada pelo Lifecycle, mas pelo **runner**: ver abaixo.
         task = self.spawn(self._gateway_runner(), name="kryncord.gateway")
@@ -589,8 +618,17 @@ class Client:
             )
         await gateway.update_presence(since=since, afk=afk, status=status, activities=activities)
 
-    def _build_gateway(self, token: str) -> GatewayClient:
-        return GatewayClient(
+    def _build_manager(
+        self, token: str, gateway_information: GatewayBotInfo | None
+    ) -> GatewayManager:
+        """O manager de shards — um só, para qualquer topologia.
+
+        Com zero parâmetros de sharding, o manager nasce com uma shard:
+        mesmo comportamento de sempre, mesmo sem REST novo. `on_ready`
+        é o que faz o `_ready` do client significar "**todas** as
+        shards prontas" — e não "a primeira que respondeu".
+        """
+        return GatewayManager(
             token=token,
             intents=self._config.intents.to_payload(),
             transport_factory=self._transport_factory,
@@ -598,6 +636,9 @@ class Client:
             session_store=self._session_store,
             compression=self._compression,
             on_event=self.dispatch,
+            shard_ids=self._shard_ids,
+            gateway_information=gateway_information,
+            on_ready=self._ready.set,
         )
 
     def _trata_excecao_loop(
@@ -630,7 +671,8 @@ class Client:
            Ler depois daria `old == new` para sempre, e o handler
            imprimiria a mesma coisa duas vezes procurando a diferença.
         2. **updater** — `EventUpdater.apply`, o cache (`0008`).
-        3. **ready** — destrava `start()` em `READY`/`RESUMED`.
+        3. **ready** — (o sinal de pronto vem do manager, quando
+           **todas** as shards estabelecem sessão — ver `_build_manager`).
         4. **roteamento** — `INTERACTION_CREATE` vai aos registries de
            comando e responder (`0026`), **antes** dos `@event`.
         5. **handlers** — o despacho, com os argumentos montados.
@@ -654,9 +696,6 @@ class Client:
         estado: dict[str, Any] = {}
         old = instantanea(name, data, self._state)
         self._update_cache(name, data)
-
-        if name.upper() in ("READY", "RESUMED"):
-            self._ready.set()
 
         await self._roteia(name, data, estado)
 

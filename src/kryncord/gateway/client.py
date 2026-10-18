@@ -161,6 +161,8 @@ class GatewayClient:
         large_threshold: int | None = None,
         presence: Mapping[str, Any] | None = None,
         max_concurrency: int = 1,
+        throttler: IdentifyThrottler | None = None,
+        on_ready: Callable[[], None] | None = None,
         compression: CompressionMode = CompressionMode.NONE,
         policy: ReconnectPolicy | None = None,
         clock: Clock = monotonic_clock,
@@ -204,12 +206,22 @@ class GatewayClient:
             max_attempts=cfg.max_reconnect_attempts,
             random=random_source,
         )
-        self._throttler = IdentifyThrottler(
-            max_concurrency=max_concurrency,
-            clock=clock,
-            sleeper=sleeper,
-            random=random_source,
+        # Throttler injetável: o manager de shards compartilha **um**
+        # entre todas — o teto de identify é por conta do aplicativo,
+        # não por conexão, e cada shard ter o seu seria fingir o
+        # contrário. Quem usa o `GatewayClient` direto (uma shard)
+        # continua recebendo o seu, como sempre.
+        self._throttler = (
+            throttler
+            if throttler is not None
+            else IdentifyThrottler(
+                max_concurrency=max_concurrency,
+                clock=clock,
+                sleeper=sleeper,
+                random=random_source,
+            )
         )
+        self._on_ready_hook = on_ready
         self._decoder = FrameDecoder(compression)
         self._send_limit = GatewaySendRateLimit(clock=clock, sleeper=sleeper, random=random_source)
         self._heartbeat = Heartbeat(sleeper=sleeper, random=random_source)
@@ -725,6 +737,7 @@ class GatewayClient:
                 "Sessão retomada — %d eventos recuperados de volta.",
                 self._sequence if self._sequence is not None else 0,
             )
+            self._avisa_pronto()
         elif name == "GUILD_MEMBERS_CHUNK":
             # Correlaciona com um pedido op 8 aberto, se houver. O
             # evento segue para `on_event` mesmo assim — passthrough
@@ -774,6 +787,18 @@ class GatewayClient:
             session.session_id[:8],
             session.resume_url,
         )
+        self._avisa_pronto()
+
+    def _avisa_pronto(self) -> None:
+        """Avisa quem cuida das shards que **esta** sessão está pronta.
+
+        O hook existe para o manager: uma shard só não é bot pronto, e
+        o `start()` só pode devolver quando todas estiverem. Idempotente
+        por natureza — reconexão reavisa, e quem ouve já trata o
+        segundo aviso como o primeiro.
+        """
+        if self._on_ready_hook is not None:
+            self._on_ready_hook()
 
     async def _handle_invalid_session(self, payload: Payload) -> Recovery:
         """`op 9` — a sessão foi rejeitada. Decide entre retomar e recomeçar.

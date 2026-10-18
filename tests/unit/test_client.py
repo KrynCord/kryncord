@@ -18,6 +18,7 @@ from kryncord.api import DiscordAPI
 from kryncord.enums import GatewayOpcode
 from kryncord.errors import FatalGatewayError, HTTPError, LifecycleError
 from kryncord.gateway.payloads import Payload
+from kryncord.models import GatewayBotInfo, SessionStartLimit
 from kryncord.rest.client import RESTClient
 from kryncord.state import ConnectionState
 from tests.conftest import FakeGatewayTransport
@@ -446,3 +447,65 @@ async def test_update_presence_sem_gateway_erro() -> None:
 
     with pytest.raises(LifecycleError, match="start"):
         await client.update_presence()
+
+
+def _gateway_info(shards: int) -> GatewayBotInfo:
+    """`/gateway/bot` de mentira para os testes de sharding."""
+    return GatewayBotInfo(
+        url="wss://gateway.discord.gg",
+        shards=shards,
+        session_start_limit=SessionStartLimit(
+            total=1000, remaining=1000, reset_after=0.0, max_concurrency=1
+        ),
+    )
+
+
+def _http_que_reclama() -> httpx.MockTransport:
+    """Transporte HTTP que falha o teste se for chamado.
+
+    A regressão que este espinho protege: um `start()` que passasse a
+    buscar `/gateway/bot` sem ninguém pedir sharding quebraria o bot
+    single-shard com um REST que ninguém mockou — e o teste que só
+    checava `is_ready` continuaria verde até o usuário reclamar.
+    """
+
+    def estoura(request: httpx.Request) -> httpx.Response:
+        raise AssertionError(f"start() não devia chamar REST; chamou {request.url.path}")
+
+    return httpx.MockTransport(estoura)
+
+
+async def test_single_shard_sem_rest_continua_igual() -> None:
+    """Zero sharding = uma shard, e nenhum REST novo — o comportamento
+    de sempre, provado com um HTTP que reclama."""
+    async with _client(_transport(), http_transport=_http_que_reclama()) as client:
+        await client.start()
+
+        assert client.is_ready
+        gerenciador = client.gateway
+        assert gerenciador is not None
+        assert gerenciador.shard_count == 1
+        assert gerenciador.assignment.shard_ids == (0,)
+
+
+async def test_shard_ids_explicitos_pulam_rest() -> None:
+    """Com `gateway_information` na mão, `shard_ids` não busca nada —
+    os dois vêm do chamador, e o REST fica quieto."""
+    transports = [_transport(), _transport()]
+    fila = list(transports)
+    client = Client(
+        _config(),
+        transport_factory=lambda: fila.pop(0),  # type: ignore[misc]
+        http_transport=_http_que_reclama(),
+        shard_ids=(0, 1),
+        gateway_information=_gateway_info(2),
+    )
+    async with client:
+        await client.start()
+
+        gerenciador = client.gateway
+        assert gerenciador is not None
+        assert gerenciador.shard_count == 2
+        for shard_id, transport in enumerate(transports):
+            identify = next(f for f in transport.sent if f["op"] == GatewayOpcode.IDENTIFY)
+            assert identify["d"]["shard"] == [shard_id, 2]

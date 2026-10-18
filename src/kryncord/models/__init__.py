@@ -39,6 +39,7 @@ from kryncord.models.base import (
 )
 from kryncord.models.channel import Channel
 from kryncord.models.command import ApplicationCommand
+from kryncord.models.gateway import GatewayBotInfo, SessionStartLimit
 from kryncord.models.guild import Guild
 from kryncord.models.interaction import Interaction
 from kryncord.models.member import Member
@@ -59,6 +60,7 @@ __all__ = [
     "Attachment",
     "Ban",
     "Channel",
+    "GatewayBotInfo",
     "Guild",
     "Interaction",
     "Member",
@@ -68,6 +70,7 @@ __all__ = [
     "PartialMessage",
     "Ready",
     "Role",
+    "SessionStartLimit",
     "TypingStart",
     "User",
     "VoiceState",
