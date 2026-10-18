@@ -8,6 +8,7 @@ um close code aparentemente sem relação com compressão.
 
 from __future__ import annotations
 
+import sys
 import zlib
 
 import pytest
@@ -15,6 +16,7 @@ import pytest
 from kryncord.errors import GatewayError
 from kryncord.gateway.compression import (
     SYNC_FLUSH,
+    ZSTD_INSTALADO,
     CompressionMode,
     FrameDecoder,
     build_gateway_url,
@@ -238,18 +240,53 @@ def test_sync_flush_marker_is_the_zlib_one() -> None:
     assert _compress_stream("x").endswith(SYNC_FLUSH)
 
 
-def test_zstd_is_refused_with_an_explanation() -> None:
-    """Exigiria a lib `zstandard`, que é dependência opcional.
+def test_zstd_sem_biblioteca_erro_acionavel(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Sem o extra, o pedido de zstd falha na cara e diz o comando.
 
-    Ligar por trás das costas mudaria o conjunto de dependências do
-    projeto sem ninguém ter pedido.
+    O monkeypatch zera o import em qualquer ambiente — mesmo onde o
+    `zstandard` está instalado, o teste prova o caminho do usuário sem
+    o `kryncord[zstd]`.
     """
+    monkeypatch.setitem(sys.modules, "zstandard", None)
+
     decoder = FrameDecoder(CompressionMode.ZSTD_STREAM)
-    with pytest.raises(GatewayError, match="zstd-stream"):
-        decoder.decode(b"qualquer coisa")
+    with pytest.raises(GatewayError, match=r"kryncord\[zstd\]"):
+        decoder.decode(b"frame comprimido de mentira")
+
+
+def test_zstd_roundtrip() -> None:
+    """Um frame zstd completo descompressa no texto original.
+
+    `importorskip` de propósito: a suíte inteira tem que continuar
+    verde no ambiente **sem** o extra (regras §16) — aqui o teste pula,
+    e o `test_zstd_sem_biblioteca_erro_acionavel` cobre o caminho sem a
+    lib.
+    """
+    zstandard = pytest.importorskip("zstandard")
+    texto = '{"op": 0, "t": "READY", "s": 1, "d": {"session_id": "abc"}}'
+
+    decoder = FrameDecoder(CompressionMode.ZSTD_STREAM)
+    assert decoder.decode(zstandard.ZstdCompressor().compress(texto.encode())) == texto
+
+
+def test_zstd_reset_e_noop_sem_estado_entre_frames() -> None:
+    """Contexto por frame: `reset()` não tem o que limpar, e o segundo
+    frame continua descompressando direito."""
+    zstandard = pytest.importorskip("zstandard")
+    compressor = zstandard.ZstdCompressor()
+    decoder = FrameDecoder(CompressionMode.ZSTD_STREAM)
+
+    primeiro = decoder.decode(compressor.compress(b'{"n": 1}'))
+    decoder.reset()
+    segundo = decoder.decode(compressor.compress(b'{"n": 2}'))
+
+    assert primeiro == '{"n": 1}'
+    assert segundo == '{"n": 2}'
 
 
 def test_supports_reports_only_what_we_decode() -> None:
     assert supports(CompressionMode.NONE) is True
     assert supports(CompressionMode.ZLIB_STREAM) is True
-    assert supports(CompressionMode.ZSTD_STREAM) is False
+    # zstd depende do extra — a resposta é a presença do `zstandard`,
+    # não uma decisão fixa do código.
+    assert supports(CompressionMode.ZSTD_STREAM) is ZSTD_INSTALADO

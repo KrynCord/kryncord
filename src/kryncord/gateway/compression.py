@@ -35,18 +35,24 @@ O que está pronto:
     erro que não diz nada.
 
 ``zstd-stream``
-    Recusado com erro explicando o porquê. Exige a biblioteca
-    ``zstandard``, que é dependência opcional — ligá-la por trás das
-    costas do usuário mudaria o conjunto de dependências do projeto sem
-    ninguém ter pedido.
+    Implementado, atrás do extra ``kryncord[zstd]``. Exige a
+    biblioteca ``zstandard`` — dependência opcional de propósito:
+    ligá-la por trás das costas do usuário mudaria o conjunto de
+    dependências do projeto sem ninguém ter pedido. Sem o extra, o
+    pedido falha no primeiro frame, com o comando de instalação na
+    mensagem. A semântica é a do discord.js: **cada frame WS é um
+    frame zstd completo** (`WebSocketShard.ts:663-670`) — sem detecção
+    de flush nem buffer pendente, e o contexto nasce e morre em cada
+    frame.
 """
 
 from __future__ import annotations
 
+import importlib.util
 import zlib
 from dataclasses import dataclass, field
 from enum import StrEnum
-from typing import Protocol
+from typing import Any, Final, Protocol
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from kryncord.errors import GatewayError
@@ -57,6 +63,12 @@ SYNC_FLUSH = b"\x00\x00\xff\xff"
 
 #: Compressão de transporte. Vai na query string.
 TRANSPORT_COMPRESSIONS = ("zlib-stream", "zstd-stream")
+
+#: ``zstandard`` está no ambiente? ``find_spec`` só olha se o pacote
+#: existe (não importa ele), e o resultado nasce uma vez aqui, na
+#: importação do módulo — a resposta não muda no meio de uma conexão,
+#: e checar a cada frame seria pagar um scan de caminho à toa.
+ZSTD_INSTALADO: Final = importlib.util.find_spec("zstandard") is not None
 
 
 class CompressionMode(StrEnum):
@@ -132,8 +144,9 @@ class FrameDecoder:
 
     `decode` devolve `None` quando ainda não tem mensagem completa — só
     em ``zlib-stream``, onde um frame pode ser o começo de uma mensagem.
-    Quem chama continua no ``recv()`` até sair texto. No modo ``none``
-    nunca devolve `None`: texto é mensagem na hora.
+    Quem chama continua no ``recv()`` até sair texto. Nos modos ``none``
+    e ``zstd-stream`` nunca devolve `None`: texto é mensagem na hora —
+    no zstd porque cada frame WS já é um frame zstd completo.
     """
 
     mode: CompressionMode = CompressionMode.NONE
@@ -146,17 +159,17 @@ class FrameDecoder:
         Manter o ``zlib`` de uma sessão morta na sessão nova faria o
         primeiro frame ser inflado contra um estado que não existe mais —
         sairia lixo, e o parser diria "JSON inválido" sem nunca apontar
-        a compressão como suspeita.
+        a compressão como suspeita. No modo ``zstd-stream`` é no-op: o
+        contexto é por frame, e não existe estado entre frames para
+        sobreviver à reconexão.
         """
         self._decompressor = None
         self._pending.clear()
 
     def decode(self, data: str | bytes) -> str | None:
         """Devolve um frame completo, ou `None` se ainda faltar pedaço."""
-        if self.mode is CompressionMode.ZSTD_STREAM:  # pragma: no cover - já recusado
-            raise GatewayError(
-                "Compressão `zstd-stream` não é suportada por esta versão da KrynCord."
-            )
+        if self.mode is CompressionMode.ZSTD_STREAM:
+            return self._decode_zstd(data)
 
         if self.mode is CompressionMode.NONE:
             if isinstance(data, bytes):
@@ -203,7 +216,60 @@ class FrameDecoder:
             self._decompressor = zlib.decompressobj()
         return self._decompressor
 
+    def _decode_zstd(self, data: str | bytes) -> str:
+        """Descomprime um frame zstd — sempre mensagem completa.
+
+        **Cada frame WS é um frame zstd inteiro** (`WebSocketShard.ts:
+        663-670` do discord.js): sem detecção de flush, sem buffer
+        pendente, e o decompressor nasce e morre aqui dentro. Por isso
+        `None` nunca sai deste modo — o frame já é a mensagem.
+        """
+        if isinstance(data, str):
+            raise GatewayError(
+                "Esperava frame binário com `compress=zstd-stream`, "
+                f"recebi texto: {data[:80]!r}. Verifique a query da URL."
+            )
+        zstandard = self._carrega_zstd()
+        try:
+            # `decompressobj()` por frame: é o caminho de streaming da
+            # lib, e funciona mesmo quando o frame não carrega o tamanho
+            # no cabeçalho — o `decompress()` direto exigiria.
+            texto: str = (
+                zstandard.ZstdDecompressor().decompressobj().decompress(data).decode("utf-8")
+            )
+            return texto
+        except zstandard.ZstdError as exc:
+            raise GatewayError(
+                f"Falha ao descomprimir frame do Gateway (zstd-stream): {exc}. "
+                "Cada frame WS deve ser um frame zstd completo — se o erro "
+                "repetir, a compressão negociada não é a que o Discord manda."
+            ) from exc
+
+    @staticmethod
+    def _carrega_zstd() -> Any:
+        """Importa `zstandard` no primeiro frame que precisar dele.
+
+        Lazy de propósito (regras §7/§8): a lib é o extra ``zstd``, e
+        importar na abertura do módulo puniria todo usuário de
+        `none`/`zlib-stream` com o custo de um import que nunca vai
+        usar.
+        """
+        try:
+            return importlib.import_module("zstandard")
+        except ImportError as exc:
+            raise GatewayError(
+                "Compressão `zstd-stream` precisa da dependência opcional "
+                "`zstandard` — instale com `pip install kryncord[zstd]`."
+            ) from exc
+
 
 def supports(mode: CompressionMode) -> bool:
-    """Esta versão da KrynCord decodifica `mode`?"""
+    """Esta versão da KrynCord decodifica `mode`?
+
+    `zstd-stream` responde `True` só com o extra instalado — a mesma
+    pergunta que o usuário faria com `pip show zstandard`, sem
+    subprocesso e sem importar a lib de novo.
+    """
+    if mode is CompressionMode.ZSTD_STREAM:
+        return ZSTD_INSTALADO
     return mode in (CompressionMode.NONE, CompressionMode.ZLIB_STREAM)
