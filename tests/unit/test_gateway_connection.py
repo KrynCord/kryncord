@@ -141,3 +141,46 @@ def test_the_limit_has_margin_under_the_documented_one() -> None:
     code 4008 no meio de um comando do usuário é caro."""
     assert SEND_LIMIT < 120
     assert SEND_WINDOW == 60.0
+
+
+async def test_frames_importantes_nao_contam_no_budget(
+    clock: FakeClock, sleeper: FakeSleeper
+) -> None:
+    """Ops importantes (heartbeat/identify/resume) não gastam budget.
+
+    É o `ImportantGatewayOpcodes` do discord.js: o teto de 115 frames
+    é dos eventos de verdade. Contar batimento seria pagar ~2 frames de
+    janela por minuto à toa.
+    """
+    limit = _limit(clock, sleeper)
+
+    for _ in range(200):
+        await limit.acquire(important=True)
+
+    assert limit.remaining == SEND_LIMIT - 1
+
+    for _ in range(SEND_LIMIT - 1):
+        await limit.acquire()
+
+    assert limit.remaining == 0
+
+
+async def test_reset_por_conexao_zera_a_janela(clock: FakeClock, sleeper: FakeSleeper) -> None:
+    """O teto é por conexão: socket novo tem budget novo.
+
+    É o `onopen` do discord.js, que zera `{sent, resetAt}` em todo
+    (re)connect. Segurar o contador da conexão anterior seria pagar
+    duas vezes por frames que nem foram na conexão nova.
+    """
+    limit = _limit(clock, sleeper)
+    for _ in range(SEND_LIMIT - 1):
+        await limit.acquire()
+    assert limit.remaining == 0
+
+    limit.reset()
+
+    assert limit.remaining == SEND_LIMIT - 1
+    # E o teto segue valendo na conexão nova: o 115º ainda espera.
+    for _ in range(SEND_LIMIT - 1):
+        await limit.acquire()
+    assert limit.remaining == 0

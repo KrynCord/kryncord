@@ -135,6 +135,11 @@ def build_identify(
         "intents": intents,
         "properties": resolved,
         "compress": compress,
+        # `capabilities: 0` é o default documentado da API, e é o que o
+        # discord.js envia sempre (`constants.ts`). Mandar explícito é
+        # paridade pura: se o default da API um dia mudar, quem manda o
+        # campo continua recebendo o comportamento de hoje.
+        "capabilities": 0,
     }
     if large_threshold is not None:
         body["large_threshold"] = large_threshold

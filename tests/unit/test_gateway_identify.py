@@ -59,6 +59,15 @@ def test_payload_compression_stays_off_by_default() -> None:
     assert payload.data["compress"] is False
 
 
+def test_identify_manda_capabilities_zero() -> None:
+    """`capabilities: 0` é o default documentado da API — e é o que o
+    discord.js envia sempre. Mandar explícito é paridade pura: se o
+    default da API mudar, quem manda o campo continua recebendo o
+    comportamento de hoje."""
+    payload = build_identify(token="t", intents=1)
+    assert payload.data["capabilities"] == 0
+
+
 def test_properties_accept_a_plain_mapping() -> None:
     payload = build_identify(token="t", intents=1, properties={"os": "windows"})
     assert payload.data["properties"] == {"os": "windows"}

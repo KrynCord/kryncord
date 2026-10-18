@@ -570,27 +570,132 @@ async def test_invalid_session_identifies_again(clock: FakeClock, sleeper: FakeS
     await task
 
 
-async def test_invalid_session_resumable_waits_before_resuming(
+async def test_invalid_session_resumable_nao_dorme_antes_de_retomar(
     clock: FakeClock, sleeper: FakeSleeper
 ) -> None:
-    """`op 9` com `d: true` → o Discord manda esperar 1 a 5 segundos."""
+    """`op 9` com `d: true` → retoma sem espera extra de 1 a 5 segundos.
+
+    A espera aleatória que existia aqui empilhava com o backoff da
+    reconexão — o `@discordjs/ws` a removeu pelo mesmo motivo: o
+    anti-thrash do backoff e o teto de 5s do throttler de identify já
+    cobrem a recuperação sozinhos.
+    """
     transport = FakeGatewayTransport()
     transport.feed_payload(hello())
     transport.feed_payload(ready())
     transport.feed_payload(Payload(op=GatewayOpcode.INVALID_SESSION, data=True))
     transport.feed_payload_next(hello())
 
-    gateway = make_gateway(
-        transport,
-        clock=clock,
-        sleeper=sleeper,
-        random_source=lambda: 1.0,  # topo da faixa: 1 + 1*(5-1) = 5s
-    )
+    gateway = make_gateway(transport, clock=clock, sleeper=sleeper)
     task = asyncio.create_task(gateway.connect())
     await settle()
 
     assert transport.opcodes.count(GatewayOpcode.RESUME) == 1
-    assert 5.0 in sleeper.calls
+    # Nenhuma espera na faixa de 1–5s: o backoff da política (~0,4s na
+    # primeira tentativa) é o único delay do caminho.
+    assert not any(1.0 <= call <= 5.0 for call in sleeper.calls)
+
+    await gateway.close()
+    await task
+
+
+# ---------------------------------------------------------------------------
+# Prazo do READY
+# ---------------------------------------------------------------------------
+
+
+async def test_ready_nao_chega_em_tempo_reconecta(clock: FakeClock, sleeper: FakeSleeper) -> None:
+    """Sem `READY`, o prazo do config derruba a tentativa e tenta de novo.
+
+    `ready_timeout` existia no config e nada o aplicava: um Discord que
+    aceitasse o socket e ficasse calado deixaria o bot "ligado" para
+    sempre — heartbeat batendo, ACK chegando, nada zumbi, e a sessão
+    nunca existe. Nesse estado, nenhum log parece errado.
+    """
+    transport = FakeGatewayTransport()
+    transport.feed_payload(hello())
+    transport.feed_payload_next(hello())
+
+    gateway = make_gateway(
+        transport,
+        clock=clock,
+        sleeper=sleeper,
+        config=GatewayConfig(max_reconnect_attempts=1, ready_timeout=0.05),
+    )
+    task = asyncio.create_task(gateway.connect())
+
+    with pytest.raises(GatewayError) as excinfo:
+        await asyncio.wait_for(task, timeout=2.0)
+
+    assert "READY" in str(excinfo.value)
+    # Duas tentativas: a primeira expirou no prazo, a segunda esgotou o
+    # teto de reconexão com o mesmo motivo.
+    assert transport.opcodes.count(GatewayOpcode.IDENTIFY) == 2
+
+
+async def test_resumed_tambem_tem_prazo(clock: FakeClock, sleeper: FakeSleeper) -> None:
+    """Quem retoma também tem prazo: `RESUMED` que não chega é o mesmo
+    hang do `READY` que não chega — e o custo de tentar de novo é
+    idêntico. É o `readyTimeout` do discord.js estendido ao resume."""
+    transport = FakeGatewayTransport()
+    transport.feed_payload(hello())
+    transport.feed_payload(ready())
+    transport.drop(code=4000, reason="queda transitória")
+    transport.feed_payload_next(hello())
+    # A segunda conexão manda RESUME... e o `RESUMED` nunca vem.
+
+    gateway = make_gateway(
+        transport,
+        clock=clock,
+        sleeper=sleeper,
+        config=GatewayConfig(max_reconnect_attempts=1, ready_timeout=0.05),
+    )
+    task = asyncio.create_task(gateway.connect())
+
+    with pytest.raises(GatewayError) as excinfo:
+        await asyncio.wait_for(task, timeout=2.0)
+
+    assert "READY" in str(excinfo.value)
+    assert transport.opcodes.count(GatewayOpcode.RESUME) == 1
+
+
+async def test_ready_rapido_nao_paga_prazo_nenhum(clock: FakeClock, sleeper: FakeSleeper) -> None:
+    """Prazo curto no config e `READY` instantâneo: nada de timeout.
+
+    É a regressão do caminho feliz — o prazo só corta silêncio, nunca
+    quem responde a tempo.
+    """
+    transport = FakeGatewayTransport()
+    transport.feed_payload(hello())
+    transport.feed_payload(ready())
+
+    gateway = make_gateway(
+        transport, clock=clock, sleeper=sleeper, config=GatewayConfig(ready_timeout=0.05)
+    )
+    task = await run_until_ready(gateway)
+
+    assert gateway.ready
+
+    await gateway.close()
+    await task
+
+
+async def test_identify_e_heartbeat_nao_contam_no_budget(
+    clock: FakeClock, sleeper: FakeSleeper
+) -> None:
+    """Identify e heartbeat são ops importantes: o budget de 115 frames
+    é dos eventos, como no discord.js (`ImportantGatewayOpcodes`).
+    Contar batimento seria pagar ~2 frames de janela por minuto à toa."""
+    transport = FakeGatewayTransport()
+    transport.feed_payload(hello())
+    transport.feed_payload(ready())
+
+    gateway = make_gateway(transport, clock=clock, sleeper=sleeper)
+    task = await run_until_ready(gateway)
+    await settle()  # deixa ao menos um heartbeat passar pelo envio
+
+    assert gateway._heartbeat.state.beats >= 1
+    assert gateway._send_limit.remaining == gateway._send_limit.limit - 1
 
     await gateway.close()
     await task

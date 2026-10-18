@@ -197,6 +197,19 @@ class GatewaySendRateLimit:
     O sentinela é ``sent + 1 >= limit``, copiado do ``WebSocketShard``:
     o 115º envio é o que espera, então cabem 114 por janela. É folga,
     não exatidão — o limite documentado do Discord é 120.
+
+    Duas mecânicas complementares vêm do mesmo ``WebSocketShard``:
+
+    * ``acquire(important=True)`` — heartbeat (op 1), identify (op 2) e
+      resume (op 6) **não** contam no budget. São os
+      ``ImportantGatewayOpcodes`` do discord.js: um bot com heartbeat de
+      ~41s gastaria dois frames da janela por minuto à toa, contando
+      batimento como evento.
+    * ``reset()`` — o teto é **por conexão**. Um socket novo tem budget
+      novo do Discord; segurar o contador da conexão anterior seria
+      pagar duas vezes por frames que nem foram na conexão nova. É o
+      ``onopen`` do discord.js, que zera ``{sent, resetAt}`` em todo
+      (re)connect.
     """
 
     limit: int = SEND_LIMIT
@@ -218,21 +231,35 @@ class GatewaySendRateLimit:
             raise ValueError(f"jitter não pode ser negativo, recebido {self.jitter}")
         self._reset_at = self.clock() + self.window
 
-    async def acquire(self) -> None:
-        """Bloqueia até poder mandar um frame sem estourar o teto."""
+    async def acquire(self, *, important: bool = False) -> None:
+        """Bloqueia até poder mandar um frame sem estourar o teto.
+
+        ``important=True`` é o dos ops que o Discord não deduz do teto —
+        ver a docstring da classe. Sai na hora, sem esperar e sem contar:
+        só os frames de evento gastam budget.
+        """
         while True:
             now = self.clock()
             if now >= self._reset_at:
                 self._reset_at = now + self.window
                 self._sent = 0
 
-            if self._sent + 1 < self.limit:
+            if important or self._sent + 1 < self.limit:
                 break
 
             wait = self._reset_at - now + self.random() * self.jitter
             await self.sleeper(wait)
 
-        self._sent += 1
+        if not important:
+            self._sent += 1
+
+    def reset(self) -> None:
+        """Abre uma janela nova — chamado a cada (re)connect.
+
+        O teto é por conexão; ver a docstring da classe.
+        """
+        self._reset_at = self.clock() + self.window
+        self._sent = 0
 
     @property
     def remaining(self) -> int:

@@ -31,8 +31,9 @@ antes de qualquer reconexão.
 
 **O shutdown é imediato mesmo em backoff.** Esperar 60 segundos de
 reconexão depois de `close()` é o que faz container ser morto com
-SIGKILL pelo orquestrador. Por isso a espera entre tentativas é
-interrompível — `close()` devolve na hora.
+SIGKILL pelo orquestrador. Por isso toda espera longa deste módulo —
+o backoff entre tentativas e a janela do throttler do identify — é
+interrompível: `close()` devolve na hora.
 """
 
 from __future__ import annotations
@@ -42,7 +43,7 @@ import random
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, replace
 from enum import StrEnum
-from typing import Any
+from typing import Any, Final, TypeVar
 
 from kryncord.config import GatewayConfig
 from kryncord.enums import CloseCode
@@ -81,9 +82,16 @@ log = get_logger("gateway")
 #: aqui para o caso de o chamador não ter feito a chamada.
 DEFAULT_GATEWAY_URL = "wss://gateway.discord.gg"
 
+#: Marcador devolvido por `_unless_closing` quando `close()` interrompeu
+#: a espera. Precisa ser distinto de `None` — `None` pode ser o
+#: resultado legítimo do awaitable (todo `-> None` é `None` no sucesso).
+INTERRUPIDO: Final = object()
+
 #: Entrega um evento cru. O primeiro argumento é o nome (``READY``,
 #: ``MESSAGE_CREATE``), o segundo é o corpo já decodificado.
 EventHandler = Callable[[str, Any], Awaitable[None]]
+
+T = TypeVar("T")
 
 
 class GatewayStatus(StrEnum):
@@ -319,7 +327,7 @@ class GatewayClient:
                     delay,
                     outcome.detail,
                 )
-                await self._sleep_unless_closing(delay)
+                await self._unless_closing(self._sleeper(delay))
         finally:
             self._running = False
             await self._shutdown()
@@ -327,8 +335,9 @@ class GatewayClient:
     async def close(self, code: int = 1000, reason: str = "KrynCord closing") -> None:
         """Fecha a conexão e encerra `connect()`. Idempotente.
 
-        Interrompe também a espera entre tentativas — ver
-        `_sleep_unless_closing` sobre por que isso importa.
+        Interrompe também as esperas longas — backoff entre tentativas e
+        janela do throttler do identify; ver `_unless_closing` sobre por
+        que isso importa.
         """
         self._closing.set()
         await self._heartbeat.stop()
@@ -385,39 +394,58 @@ class GatewayClient:
 
         try:
             await transport.connect(self._url_for(session))
+            # A janela de envio é por conexão: o socket novo tem budget
+            # novo do Discord. É o `onopen` do discord.js, que zera o
+            # contador em todo (re)connect.
+            self._send_limit.reset()
             hello = await self._wait_hello()
 
             if session is None:
                 self._status = GatewayStatus.IDENTIFYING
-                # Espera do throttler ANTES do envio, não depois: o teto
-                # é por janela, e proteger depois é chegar ao 429.
-                await self._throttler.wait(self._shard_id)
-                await self._send(
-                    build_identify(
-                        token=self._token,
-                        intents=self._intents,
-                        properties=self._properties,
-                        large_threshold=self._large_threshold,
-                        shard=(
-                            (self._shard_id, self._shard_count) if self._shard_count > 1 else None
-                        ),
-                        presence=self._presence,
+                apresentou = await self._unless_closing(
+                    self._apresenta(
+                        build_identify(
+                            token=self._token,
+                            intents=self._intents,
+                            properties=self._properties,
+                            large_threshold=self._large_threshold,
+                            shard=(
+                                (self._shard_id, self._shard_count)
+                                if self._shard_count > 1
+                                else None
+                            ),
+                            presence=self._presence,
+                        )
                     )
                 )
             else:
                 self._status = GatewayStatus.RESUMING
-                await self._send(
-                    build_resume(
-                        token=self._token,
-                        session_id=session.session_id,
-                        sequence=session.sequence,
+                apresentou = await self._unless_closing(
+                    self._send(
+                        build_resume(
+                            token=self._token,
+                            session_id=session.session_id,
+                            sequence=session.sequence,
+                        ),
+                        important=True,
                     )
+                )
+
+            if apresentou is INTERRUPIDO:
+                # `close()` chegou no meio da apresentação. Devolve sem
+                # levantar: o loop de `connect()` vê o closing e encerra.
+                return _RunOutcome(
+                    reached_ready=False, detail="close() durante a apresentação da sessão"
                 )
 
             # Depois do Identify, nunca antes: ver docstring do módulo.
             self._start_heartbeat(hello)
 
-            recovery = await self._pump()
+            # O prazo do `READY` começa a correr quando o Discord
+            # recebe a apresentação — é o `readyTimeout` de 15s do
+            # discord.js, que já estava no config e faltava aplicar.
+            ready_deadline = self._clock() + self._config.ready_timeout
+            recovery = await self._pump(ready_deadline)
             detail = f"o Discord pediu {recovery.value}"
 
         except asyncio.CancelledError:
@@ -490,18 +518,24 @@ class GatewayClient:
             on_zombie=self._on_zombie,
         )
 
-    async def _pump(self) -> Recovery:
-        """Lê frames até a conexão acabar. Devolve o `Recovery` pedido."""
+    async def _pump(self, ready_deadline: float | None) -> Recovery:
+        """Lê frames até a conexão acabar. Devolve o `Recovery` pedido.
+
+        `ready_deadline` é o prazo para `READY`/`RESUMED` chegar — só
+        vale enquanto a sessão não está estabelecida. Depois disso é
+        operação normal e o prazo some.
+        """
         while True:
-            payload = await self._recv_payload_checked()
+            payload = await self._recv_frame(ready_deadline)
 
             if payload.sequence is not None:
                 await self._track_sequence(payload.sequence)
 
             if payload.is_heartbeat:
-                # O Discord pediu um agora. Não passa pelo rate limit de
-                # envio: é o próprio batimento, já contado.
-                await self._send(make_heartbeat(self._sequence))
+                # O Discord pediu um agora. Conta como heartbeat, não
+                # como evento: op 1 é dos `ImportantGatewayOpcodes` que
+                # o discord.js não deduz do budget de envio.
+                await self._send(make_heartbeat(self._sequence), important=True)
                 continue
 
             if payload.is_heartbeat_ack:
@@ -522,6 +556,36 @@ class GatewayClient:
                 continue
 
             log.debug("Opcode não tratado ignorado: op=%d", payload.op)
+
+    async def _recv_frame(self, ready_deadline: float | None) -> Payload:
+        """Recebe o próximo frame, com o prazo do `READY` ainda correndo.
+
+        Sem este prazo, um Discord que aceita o socket e fica calado
+        deixaria o bot "ligado" para sempre: o heartbeat bate, o ACK
+        chega, nada é zumbi — e a sessão nunca existe. Com ele, o
+        silêncio vira `GatewayError` e o ciclo de recuperação tenta de
+        novo, que é o `readyTimeout` de 15s do discord.js.
+
+        O prazo é medido pelo relógio injetado (testes controlam o
+        tempo); a espera em si é a do event loop, que é quem conta
+        segundos de verdade. Depois do `READY`, sem prazo nenhum — a
+        partir daqui o silêncio é problema do heartbeat, não deste
+        frame.
+        """
+        if self._reached_ready or ready_deadline is None:
+            return await self._recv_payload_checked()
+
+        restante = ready_deadline - self._clock()
+        if restante <= 0:
+            raise GatewayError(
+                f"Gateway não mandou `READY`/`RESUMED` em {self._config.ready_timeout}s."
+            )
+        try:
+            return await asyncio.wait_for(self._recv_payload_checked(), timeout=restante)
+        except TimeoutError as exc:
+            raise GatewayError(
+                f"Gateway não mandou `READY`/`RESUMED` em {self._config.ready_timeout}s."
+            ) from exc
 
     async def _recv_payload_checked(self) -> Payload:
         """Recebe um frame, fechando com 4002 se ele for ilegível.
@@ -610,19 +674,19 @@ class GatewayClient:
     async def _handle_invalid_session(self, payload: Payload) -> Recovery:
         """`op 9` — a sessão foi rejeitada. Decide entre retomar e recomeçar.
 
-        O Discord manda 1–5 segundos de espera junto, e a espera é aqui
-        dentro de propósito: é o único lugar que sabe se há sessão para
-        retomar. Sorteada dentro da faixa para que shards caídas ao mesmo
-        tempo não voltem em fila indiana.
+        ``d: true`` com sessão guardada → retoma; ``d: false`` (ou sem
+        sessão) → identify novo. A espera entre a rejeição e a nova
+        tentativa é o backoff da política de reconexão — o mesmo
+        anti-thrash de 500ms do discord.js, que no `@discordjs/ws`
+        substituiu a espera aleatória de 1–5s que este módulo fazia.
+        Pagar as duas era dobrar a conta da recuperação: o throttler de
+        identify já garante os 5s do identify seguinte.
         """
         resumable = bool(payload.is_resumable)
         session = self._session
 
         if resumable and session is not None:
-            low, high = self._config.invalid_session_wait
-            wait = low + self._random() * max(0.0, high - low)
-            log.info("`invalid_session` retomável — esperando %.2fs antes do resume.", wait)
-            await self._sleeper(wait)
+            log.info("`invalid_session` retomável (d=%s) — retomando sessão.", payload.data)
             return Recovery.RESUME
 
         log.info(
@@ -678,15 +742,32 @@ class GatewayClient:
     # Envio e utilidades
     # ------------------------------------------------------------------
 
-    async def _send(self, payload: Payload) -> None:
-        """Manda um frame, respeitando o teto de 115/60s do Gateway."""
-        await self._send_limit.acquire()
+    async def _send(self, payload: Payload, *, important: bool = False) -> None:
+        """Manda um frame, respeitando o teto de 115/60s do Gateway.
+
+        `important=True` para os ops que o Discord não deduz do teto —
+        heartbeat (1), identify (2) e resume (6), os
+        `ImportantGatewayOpcodes` do discord.js. Só eventos de verdade
+        gastam budget.
+        """
+        await self._send_limit.acquire(important=important)
         await self._require_transport().send(payload.encode())
 
+    async def _apresenta(self, payload: Payload) -> None:
+        """Espera o teto de identify e manda o `IDENTIFY`.
+
+        A espera vem ANTES do envio, não depois: o teto é por janela, e
+        proteger depois é chegar ao 429. A janela do throttler pode
+        chegar a ~6,5s — por isso esta espera roda sob `_unless_closing`,
+        e um `close()` no meio dela devolve na hora.
+        """
+        await self._throttler.wait(self._shard_id)
+        await self._send(payload, important=True)
+
     async def _send_beat(self, sequence: int | None) -> None:
-        """Callback do `Heartbeat`. Passa pelo teto de envio — o
-        batimento conta como frame, e o discord.js conta o dele também."""
-        await self._send(make_heartbeat(sequence))
+        """Callback do `Heartbeat`. Conta como heartbeat, não como
+        evento: o batimento é op importante, como no discord.js."""
+        await self._send(make_heartbeat(sequence), important=True)
 
     async def _track_sequence(self, sequence: int) -> None:
         """Guarda a sequence corrente, mantendo a sessão sempre atual.
@@ -733,24 +814,31 @@ class GatewayClient:
         except Exception:
             log.debug("Erro ao fechar a conexão (código %d)", code, exc_info=True)
 
-    async def _sleep_unless_closing(self, seconds: float) -> None:
-        """Espera entre tentativas, mas sai na hora se `close()` chegar.
+    async def _unless_closing(self, awaitable: Awaitable[T]) -> T | object:
+        """Corre `awaitable`, mas sai na hora se `close()` chegar.
 
-        Sem isso, um bot em backoff de 60s levaria até 60s para desligar
-        depois de `close()` — e tempo de desligamento é exatamente o que
+        Devolve o resultado de `awaitable`, ou `INTERRUPIDO` se o
+        `close()` interrompeu — nunca `None` como marcador, porque
+        `None` é o resultado legítimo de um monte de awaitable. Sem
+        isso, um bot em backoff de 60s — ou esperando a janela do
+        throttler do identify virar — levaria até 60s para desligar
+        depois de `close()`; e tempo de desligamento é exatamente o que
         um orquestrador de container mede antes de mandar `SIGKILL`.
         """
-        if seconds <= 0 or self._closing.is_set():
-            return
+        if self._closing.is_set():
+            return INTERRUPIDO
 
-        sleeper = asyncio.ensure_future(self._sleeper(seconds))
+        operacao = asyncio.ensure_future(awaitable)
         closing = asyncio.ensure_future(self._closing.wait())
         try:
-            await asyncio.wait({sleeper, closing}, return_when=asyncio.FIRST_COMPLETED)
+            done, _ = await asyncio.wait({operacao, closing}, return_when=asyncio.FIRST_COMPLETED)
+            if operacao in done:
+                return operacao.result()
+            return INTERRUPIDO
         finally:
             closing.cancel()
-            if not sleeper.done():
-                sleeper.cancel()
+            if not operacao.done():
+                operacao.cancel()
 
     async def _shutdown(self) -> None:
         """Fecha o que sobrou e marca o estado final. Sempre roda."""

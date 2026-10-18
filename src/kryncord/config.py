@@ -170,18 +170,12 @@ class GatewayConfig:
     """`None` usa o valor que o Discord manda no `HELLO`. Só sobrescreva
     em teste — em produção, adiantar ou atrasar o batimento é a forma
     mais rápida de ser derrubado por "zumbi"."""
-    identify_timeout: float = 10.0
-    resume_timeout: float = 10.0
     max_reconnect_attempts: int | None = 5
     """Falhas **consecutivas** antes de desistir e levantar
     `GatewayError`. Chegar ao `READY` zera o contador — o limite existe
     para não girar sozinho quando o token está errado, não para punir um
     bot que já funcionou. `None` tenta para sempre. Backoff exponencial
     com jitter entre as tentativas."""
-    invalid_session_wait: tuple[float, float] = (1.0, 5.0)
-    """Intervalo (mínimo, máximo) que o Discord manda esperar entre um
-    `invalid_session` e a reconexão. Sorteado dentro da faixa para que
-    várias shards caídas ao mesmo tempo não voltem em fila indiana."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -238,8 +232,6 @@ class Config:
         _require_positive("gateway.connect_timeout", self.gateway.connect_timeout)
         _require_positive("gateway.hello_timeout", self.gateway.hello_timeout)
         _require_positive("gateway.ready_timeout", self.gateway.ready_timeout)
-        _require_positive("gateway.identify_timeout", self.gateway.identify_timeout)
-        _require_positive("gateway.resume_timeout", self.gateway.resume_timeout)
         if self.gateway.heartbeat_interval is not None:
             _require_positive("gateway.heartbeat_interval", self.gateway.heartbeat_interval)
 
@@ -249,14 +241,6 @@ class Config:
         if self.gateway.max_reconnect_attempts is not None:
             _require_non_negative(
                 "gateway.max_reconnect_attempts", self.gateway.max_reconnect_attempts
-            )
-
-        minimum, maximum = self.gateway.invalid_session_wait
-        if minimum < 0 or maximum < minimum:
-            raise ValueError(
-                "gateway.invalid_session_wait deve ser (mínimo, máximo) com "
-                f"mínimo >= 0 e máximo >= mínimo, recebido "
-                f"{self.gateway.invalid_session_wait}"
             )
 
         if self.http.max_keepalive_connections > self.http.max_connections:
