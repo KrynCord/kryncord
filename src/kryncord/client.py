@@ -568,6 +568,27 @@ class Client:
             timeout=timeout,
         )
 
+    async def update_presence(
+        self,
+        *,
+        since: int | None = None,
+        afk: bool = False,
+        status: str = "online",
+        activities: Sequence[Mapping[str, Any]] = (),
+    ) -> None:
+        """Muda a presença do bot (op 3) — todas as shards, quando houver.
+
+        Com uma shard só, delega direto. Com várias, o broadcast é a
+        chamada certa: presença é propriedade da sessão, e uma só shard
+        com status diferente da irmã é bot meio ligado.
+        """
+        gateway = self._gateway
+        if gateway is None:
+            raise LifecycleError(
+                "`update_presence` precisa do Gateway ligado — chame `start()` antes."
+            )
+        await gateway.update_presence(since=since, afk=afk, status=status, activities=activities)
+
     def _build_gateway(self, token: str) -> GatewayClient:
         return GatewayClient(
             token=token,

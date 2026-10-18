@@ -15,6 +15,7 @@ import pytest
 
 from kryncord import CachePolicy, Client, Config, Intents
 from kryncord.api import DiscordAPI
+from kryncord.enums import GatewayOpcode
 from kryncord.errors import FatalGatewayError, HTTPError, LifecycleError
 from kryncord.gateway.payloads import Payload
 from kryncord.rest.client import RESTClient
@@ -424,3 +425,24 @@ async def test_close_direto_tambem_fecha_o_rest() -> None:
         # socket — e nada mais é mandado para a rede.
         with pytest.raises(HTTPError, match="fechado"):
             await client.api.users.me()
+
+
+async def test_update_presence_delega_ao_gateway() -> None:
+    """`Client.update_presence` chega no gateway e vira op 3 no socket."""
+    transport = _transport()
+    async with _client(transport) as client:
+        await client.start()
+
+        await client.update_presence(status="idle", activities=[{"name": "prova"}])
+
+        enviado = next(f for f in transport.sent if f["op"] == GatewayOpcode.PRESENCE_UPDATE)
+        assert enviado["d"]["status"] == "idle"
+        assert enviado["d"]["activities"] == [{"name": "prova"}]
+
+
+async def test_update_presence_sem_gateway_erro() -> None:
+    """Antes do `start()` a recusa é na cara — o gateway ainda não existe."""
+    client = _client()
+
+    with pytest.raises(LifecycleError, match="start"):
+        await client.update_presence()

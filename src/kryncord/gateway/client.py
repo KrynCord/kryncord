@@ -67,6 +67,7 @@ from kryncord.gateway.identify import (
 )
 from kryncord.gateway.members import MemberChunkTracker
 from kryncord.gateway.payloads import Payload, make_heartbeat
+from kryncord.gateway.presence import PresenceRateLimit, build_presence_update
 from kryncord.gateway.reconnect import (
     RESUMING_CODE,
     ReconnectPolicy,
@@ -213,6 +214,7 @@ class GatewayClient:
         self._send_limit = GatewaySendRateLimit(clock=clock, sleeper=sleeper, random=random_source)
         self._heartbeat = Heartbeat(sleeper=sleeper, random=random_source)
         self._members = MemberChunkTracker()
+        self._presence_limit = PresenceRateLimit(clock=clock, sleeper=sleeper, random=random_source)
 
         self._status = GatewayStatus.IDLE
         self._running = False
@@ -413,6 +415,38 @@ class GatewayClient:
             raise
 
         return await pedido.futuro
+
+    async def update_presence(
+        self,
+        *,
+        since: int | None = None,
+        afk: bool = False,
+        status: str = "online",
+        activities: Sequence[Mapping[str, Any]] = (),
+    ) -> None:
+        """Muda a presença em runtime (op 3).
+
+        O `client.presence.set()` do discord.js, com as duas diferenças
+        do doc 05: o teto de 5/20s é **cobrado na frente** (quem manda
+        mais paga a espera, em vez de ter o update sumido sem aviso), e
+        a mudança fora de sessão é recusada na cara (`LifecycleError`),
+        não enfileirada em silêncio até o `RESUMED`.
+
+        `since` é há quanto tempo (ms) o "jogo" começou, ou `None`;
+        `activities` é lista de dicts crus, os mesmos que o Discord
+        devolve nos eventos. A presença inicial, antes do READY, vai no
+        IDENTIFY — `identify.py` — e não aqui.
+        """
+        if not self._reached_ready or self._session is None:
+            raise LifecycleError(
+                "`update_presence` exige sessão estabelecida — "
+                "espere o READY (ou RESUMED), ou ponha a presença inicial no identify."
+            )
+
+        await self._presence_limit.acquire()
+        await self._send(
+            build_presence_update(since=since, afk=afk, status=status, activities=activities)
+        )
 
     # ------------------------------------------------------------------
     # Uma tentativa de conexão
