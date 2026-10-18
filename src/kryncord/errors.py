@@ -160,6 +160,36 @@ class FatalGatewayError(GatewayError):
         self.code = code
 
 
+class MemberRequestError(GatewayError):
+    """Falha num pedido de membros (op 8). Base da família."""
+
+
+class MemberRequestTimeout(MemberRequestError):
+    """O Discord não mandou chunk dentro do prazo (120s por padrão).
+
+    O prazo renova a cada chunk recebido, então o que esgota é um
+    pedido que parou de andar — não um servidor grande demais.
+    """
+
+
+class MemberRequestRateLimited(MemberRequestError):
+    """O Gateway recusou o pedido (dispatch `RATE_LIMITED`) com um
+    `retry_after` em segundos — o mesmo campo do REST."""
+
+    def __init__(self, message: str, *, retry_after: float) -> None:
+        super().__init__(message)
+        self.retry_after = retry_after
+
+
+class TooManyMemberRequests(MemberRequestError):
+    """Teto de pedidos de membros simultâneos estourado.
+
+    O discord.js não tem teto (só incrementa max-listeners); aqui ele
+    existe para o erro sair na cara de quem chamou, e não virar fila de
+    futuros que ninguém consome.
+    """
+
+
 # --------------------------------------------------------------------------
 # Ciclo de vida
 # --------------------------------------------------------------------------

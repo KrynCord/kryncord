@@ -120,9 +120,13 @@ from kryncord.errors import (
     InvalidInteractionState,
     KrynCordError,
     LifecycleError,
+    MemberRequestError,
+    MemberRequestRateLimited,
+    MemberRequestTimeout,
     RateLimitError,
     ResponderDefinitionError,
     SessionInvalidError,
+    TooManyMemberRequests,
 )
 from kryncord.events import EventName, event, normalize_event_name
 from kryncord.intents import Intents
@@ -270,6 +274,11 @@ __all__ = [  # noqa: RUF022
     "DiscordAPIError",
     "GatewayError",
     "SessionInvalidError",
+    # erros de pedidos de membros (op 8)
+    "MemberRequestError",
+    "MemberRequestTimeout",
+    "MemberRequestRateLimited",
+    "TooManyMemberRequests",
     "LifecycleError",
     # erros de despacho — 0017
     "DispatchError",

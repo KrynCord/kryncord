@@ -40,13 +40,13 @@ from __future__ import annotations
 
 import asyncio
 import random
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from enum import StrEnum
 from typing import Any, Final, TypeVar
 
 from kryncord.config import GatewayConfig
-from kryncord.enums import CloseCode
+from kryncord.enums import CloseCode, GatewayOpcode
 from kryncord.errors import (
     ConnectionClosedError,
     FatalGatewayError,
@@ -65,6 +65,7 @@ from kryncord.gateway.identify import (
     build_identify,
     build_resume,
 )
+from kryncord.gateway.members import MemberChunkTracker
 from kryncord.gateway.payloads import Payload, make_heartbeat
 from kryncord.gateway.reconnect import (
     RESUMING_CODE,
@@ -211,6 +212,7 @@ class GatewayClient:
         self._decoder = FrameDecoder(compression)
         self._send_limit = GatewaySendRateLimit(clock=clock, sleeper=sleeper, random=random_source)
         self._heartbeat = Heartbeat(sleeper=sleeper, random=random_source)
+        self._members = MemberChunkTracker()
 
         self._status = GatewayStatus.IDLE
         self._running = False
@@ -352,6 +354,65 @@ class GatewayClient:
             # fora, ninguém vai fazer — e um `close()` que não muda o
             # `status` deixa o objeto mentindo sobre si mesmo.
             self._status = GatewayStatus.CLOSED
+
+    async def request_guild_members(
+        self,
+        guild_id: int | str,
+        *,
+        query: str | None = None,
+        limit: int = 0,
+        presences: bool = False,
+        user_ids: Sequence[int | str] | None = None,
+        nonce: str | None = None,
+        timeout: float | None = None,
+    ) -> list[dict[str, Any]]:
+        """Puxa os membros de uma guild pela conexão (op 8).
+
+        O `guild.members.fetch()` do discord.js, em payload cru: devolve
+        a soma dos `members` de todos os `GUILD_MEMBERS_CHUNK` do pedido,
+        sem modelo por cima. Os chunks continuam chegando como evento em
+        `on_event` como sempre chegaram — este método só soma o que já é
+        público e espera o fim.
+
+        `limit=0` pede a guild inteira; `query` filtra por nome; com
+        `user_ids`, um `query` vazio casa com qualquer nome. `nonce`
+        ausente vira uuid de 32 chars (teto do Discord); `timeout`
+        sobrepõe os 120s do módulo, renovados a cada chunk.
+
+        Exige sessão estabelecida (READY/RESUMED): op 8 fora de sessão é
+        frame que o Discord descarta sem avisar ninguém.
+        """
+        if not self._reached_ready or self._session is None:
+            raise LifecycleError(
+                "`request_guild_members` exige sessão estabelecida — "
+                "espere o READY (ou RESUMED) antes de pedir membros."
+            )
+
+        pedido = self._members.abrir(guild_id, limit=limit, nonce=nonce, timeout=timeout)
+
+        body: dict[str, Any] = {
+            "guild_id": str(guild_id),
+            "presences": presences,
+            "nonce": pedido.nonce,
+            "limit": limit,
+        }
+        if query is not None:
+            body["query"] = query
+        if user_ids is not None:
+            body["user_ids"] = [str(uid) for uid in user_ids]
+
+        try:
+            # Não é op importante: o pedido de membros é evento como
+            # qualquer outro e conta no budget de 115 frames.
+            await self._send(Payload(op=GatewayOpcode.REQUEST_GUILD_MEMBERS, data=body))
+        except BaseException:
+            # Envio falhou no meio (sem transporte, cancelamento): sem
+            # descartar o pedido, o futuro esperaria chunk que nunca
+            # vem e o asyncio reclamaria no GC.
+            self._members.abortar(pedido.nonce)
+            raise
+
+        return await pedido.futuro
 
     # ------------------------------------------------------------------
     # Uma tentativa de conexão
@@ -630,6 +691,15 @@ class GatewayClient:
                 "Sessão retomada — %d eventos recuperados de volta.",
                 self._sequence if self._sequence is not None else 0,
             )
+        elif name == "GUILD_MEMBERS_CHUNK":
+            # Correlaciona com um pedido op 8 aberto, se houver. O
+            # evento segue para `on_event` mesmo assim — passthrough
+            # cru: quem não usa a API de chunks continua vendo tudo.
+            self._members.on_chunk(payload.data)
+        elif name == "RATE_LIMITED":
+            # Mesma lógica: rejeita o pedido correspondente (nonce em
+            # `d.meta.nonce`) e deixa o evento passar adiante.
+            self._members.on_rate_limited(payload.data)
 
         if self._on_event is None:
             return
@@ -843,6 +913,10 @@ class GatewayClient:
     async def _shutdown(self) -> None:
         """Fecha o que sobrou e marca o estado final. Sempre roda."""
         await self._heartbeat.stop()
+        # Pedidos op 8 abertos não sobrevivem ao socket: cancelar os
+        # futuros é o que evita "task was destroyed but it is pending"
+        # em quem estava esperando membros.
+        self._members.close()
         transport = self._transport
         self._transport = None
         if transport is not None:

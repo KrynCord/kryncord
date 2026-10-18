@@ -29,7 +29,7 @@ Uso::
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Callable, Coroutine, Mapping
+from collections.abc import Callable, Coroutine, Mapping, Sequence
 from dataclasses import replace
 from typing import TYPE_CHECKING, Any, Self
 
@@ -534,6 +534,39 @@ class Client:
         Para quem liga o bot em background e quer só esperar.
         """
         await self._ready.wait()
+
+    async def request_guild_members(
+        self,
+        guild_id: int | str,
+        *,
+        query: str | None = None,
+        limit: int = 0,
+        presences: bool = False,
+        user_ids: Sequence[int | str] | None = None,
+        nonce: str | None = None,
+        timeout: float | None = None,
+    ) -> list[dict[str, Any]]:
+        """Puxa os membros de uma guild (op 8) — payloads crus.
+
+        A soma dos `GUILD_MEMBERS_CHUNK` do pedido, entregue quando os
+        chunks terminarem. Com uma shard só, a rota é sempre a mesma;
+        quando houver várias, a shard dona da guild é
+        `(guild_id >> 22) % shards` — mesma conta do discord.js.
+        """
+        gateway = self._gateway
+        if gateway is None:
+            raise LifecycleError(
+                "`request_guild_members` precisa do Gateway ligado — chame `start()` antes."
+            )
+        return await gateway.request_guild_members(
+            guild_id,
+            query=query,
+            limit=limit,
+            presences=presences,
+            user_ids=user_ids,
+            nonce=nonce,
+            timeout=timeout,
+        )
 
     def _build_gateway(self, token: str) -> GatewayClient:
         return GatewayClient(
